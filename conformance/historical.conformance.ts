@@ -1,6 +1,6 @@
 // Переиспользуемый conformance-харнес контракта historical.2. given baseUrl → проверки.
 // Юнит, который извлечёт Инициатива #2 (@trading-platform/sdk).
-import type { CanonicalRowV2 } from '../../../src/contracts/historical/canonical-row.js';
+import type { CanonicalRowV2 } from '@trading-platform/sdk/historical';
 
 export interface HistoricalConformanceTarget { readonly baseUrl: string; readonly token?: string }
 

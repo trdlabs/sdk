@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "conformance",
+    "outDir": "dist/conformance"
+  },
+  "include": ["conformance/**/*"],
+  "exclude": ["dist", "node_modules"]
+}

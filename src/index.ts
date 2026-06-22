@@ -18,6 +18,21 @@ export type {
   MarketDataCoverageState,
 } from './contract/market-data-kinds.js';
 
+// --- Historical contract DTO (materialized; SDK-owned) ---
+export {
+  SCHEMA_VERSION,
+  CANONICAL_ROW_FIELDS,
+  SCHEMA_VERSION_V2,
+  CANONICAL_ROW_V2_FIELDS,
+} from './historical/index.js';
+
+export type {
+  CanonicalRow,
+  CanonicalRowField,
+  CanonicalRowV2,
+  CanonicalRowV2Field,
+} from './historical/index.js';
+
 /** Version of this SDK package. */
 export const SDK_VERSION = '0.4.0';
 
