@@ -1,6 +1,6 @@
 {
   "name": "@trading-platform/sdk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Contract-first SDK facade over the trading-platform consumer surface (ops-read + paper-intake + capabilities/versioning + conformance harness). Standalone public package; no platform runtime/build coupling.",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,6 +28,14 @@
     "./conformance": {
       "types": "./dist/conformance/historical.conformance.d.ts",
       "import": "./dist/conformance/historical.conformance.js"
+    },
+    "./research-contract": {
+      "types": "./dist/research-contract/index.d.ts",
+      "import": "./dist/research-contract/index.js"
+    },
+    "./validation": {
+      "types": "./dist/validation/index.d.ts",
+      "import": "./dist/validation/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -37,15 +45,19 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && tsc -p tsconfig.conformance.json",
+    "build": "rm -rf dist && tsx scripts/gen-research-schemas.ts --check && tsc -p tsconfig.json && tsc -p tsconfig.conformance.json && cp -r src/validation/schemas dist/validation/schemas",
+    "gen:schemas": "tsx scripts/gen-research-schemas.ts",
+    "conformance:validation": "node test/conformance-validation.mjs",
     "sdk:pack": "mkdir -p .artifacts/sdk && npm pack --pack-destination .artifacts/sdk",
     "sdk:verify": "tsx scripts/verify-sdk-package.ts \".artifacts/sdk/trading-platform-sdk-$(node -p \"require('./package.json').version\").tgz\""
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "decimal.js": "^10.6.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "ts-json-schema-generator": "^2.9.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.2"
   }
