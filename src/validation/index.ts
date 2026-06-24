@@ -16,6 +16,9 @@ export type ValidationInput =
   | ({ readonly inputKind: 'run_request' } & RunRequestInput)
   | ({ readonly inputKind: 'promotion' } & PromotionInput);
 
+// 042: код-таксономия — часть публичной поверхности валидатора (потребители-гейты сверяют severity).
+export { CODE_SEVERITY, ALL_VALIDATION_CODES } from './codes.js';
+
 // Реестр схем компилируется один раз (кэш core-схем) и переиспользуется. Чистоту validate()
 // это не нарушает: реестр не несёт изменяемого состояния между вызовами для одного входа.
 let registrySingleton: SchemaRegistry | undefined;
