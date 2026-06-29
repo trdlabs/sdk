@@ -26,6 +26,20 @@ export interface BotRunRecord {
   readonly symbols: readonly string[];
 }
 
+// ops.5 — canonical close-reason taxonomy (read-surface classification of journal facts).
+// 'take_profit_partial' vs 'take_profit_final' is the discriminator lab's winner-selection cares about.
+export type CloseReason =
+  | 'take_profit_final'
+  | 'take_profit_partial'
+  | 'stop_loss'
+  | 'breakeven'
+  | 'trailing_stop'
+  | 'signal_exit'
+  | 'time_exit'
+  | 'liquidation'
+  | 'manual'
+  | 'other';
+
 export interface ClosedTrade {
   readonly tradeId: string;
   readonly runId: string;
@@ -38,7 +52,8 @@ export interface ClosedTrade {
   readonly realizedPnl: string;
   readonly pnlPct: string;
   readonly isWin: boolean | null;
-  readonly closeReason: string | null;
+  readonly closeReason: CloseReason | null;
+  readonly closeReasonRaw: string | null;
 }
 
 // ops.4 — per-trade forensic evidence (Surface A): prices + lifecycle timeline.
@@ -65,7 +80,8 @@ export interface TradeEvidence {
   readonly exitPrice: string | null;
   readonly realizedPnl: string;
   readonly pnlPct: string;
-  readonly closeReason: string | null;
+  readonly closeReason: CloseReason | null;
+  readonly closeReasonRaw: string | null;
   readonly lifecycle: readonly TradeLifecycleEvent[];
 }
 
