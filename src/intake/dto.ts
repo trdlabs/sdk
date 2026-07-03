@@ -38,6 +38,16 @@ export interface PaperCandidateStrategyInput {
   readonly strategyProfileRef?: string | null;
   readonly moduleRef?: string | null;
   readonly moduleBundleHash?: string | null;
+  /**
+   * Identity/params (platform 062, additive & optional): projected into
+   * bot_bundle.metadata on promotion — a bundle without strategyName+side is
+   * not launchable by the bundle-host. `side` accepts only 'long'|'short'
+   * (platform allowlist-projection silently drops anything else); `params`
+   * is the strategy's own free-form parameter object.
+   */
+  readonly strategyName?: string | null;
+  readonly side?: 'long' | 'short' | null;
+  readonly params?: Record<string, unknown> | null;
 }
 
 /** Convenience alias for the evidence-anchor bundle a candidate carries. */
