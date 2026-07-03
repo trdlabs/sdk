@@ -20,6 +20,9 @@ export interface BotRunRecord {
   readonly mode: BotMode;
   readonly status: BotRunStatus;
   readonly strategy: BotRunStrategyRef;
+  /** ops.6 (platform 074): bot_bundle id for bundle-backed runs (== candidateId when promoted
+   *  from paper-intake, per platform 062) — exact join key for paper monitors; null for in-repo bots. */
+  readonly bundleId: string | null;
   readonly startedAtMs: number;
   readonly finishedAtMs: number | null;
   readonly lastSeenMs: number;
