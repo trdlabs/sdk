@@ -1,4 +1,4 @@
-// @trading-platform/sdk/ops-read — live bot-results wire types (types-only, own-declared).
+// @trdlabs/sdk/ops-read — live bot-results wire types (types-only, own-declared).
 //
 // Source of truth for these shapes is trading-platform/src/operations/dto.ts (feature "ops-read 033").
 // They are declared here verbatim (primitive / closed-union only — zero platform imports) and proven

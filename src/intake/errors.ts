@@ -1,4 +1,4 @@
-// @trading-platform/sdk/intake — intake error model (feature 036, Phase 9 / T052).
+// @trdlabs/sdk/intake — intake error model (feature 036, Phase 9 / T052).
 // The closed set of 5 intake error categories (mirrors the platform `IntakeErrorCategory`). `conflict`
 // belongs to the write path (idempotency fingerprint mismatch); the Operations read surface uses a
 // separate 4-category model and is NOT mixed in here.

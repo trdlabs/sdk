@@ -1,6 +1,6 @@
-// @trading-platform/sdk/intake/http-transport — reference HTTP adapter (feature 036, Phase 9 / T054).
+// @trdlabs/sdk/intake/http-transport — reference HTTP adapter (feature 036, Phase 9 / T054).
 //
-// Required, isolated, opt-in subpath: part of the package, but the core (`@trading-platform/sdk/intake`)
+// Required, isolated, opt-in subpath: part of the package, but the core (`@trdlabs/sdk/intake`)
 // never imports it. Adapts the platform HTTP intake endpoint (POST /intake/paper-candidate) into an
 // IntakeTransport using the GLOBAL `fetch` (or an injected FetchLike) — NO axios/ws/hono, no platform
 // internals, no host paths (LANDMINE verify_034_forbidden_scan). Owns no execution/deployment authority.

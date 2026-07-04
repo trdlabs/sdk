@@ -1,6 +1,6 @@
 {
-  "name": "@trading-platform/sdk",
-  "version": "0.9.3",
+  "name": "@trdlabs/sdk",
+  "version": "0.9.4",
   "description": "Contract-first SDK facade over the trading-platform consumer surface (ops-read + paper-intake + capabilities/versioning + conformance harness). Standalone public package; no platform runtime/build coupling.",
   "license": "Apache-2.0",
   "type": "module",
@@ -49,7 +49,7 @@
     "gen:schemas": "tsx scripts/gen-research-schemas.ts",
     "conformance:validation": "node test/conformance-validation.mjs",
     "sdk:pack": "mkdir -p .artifacts/sdk && npm pack --pack-destination .artifacts/sdk",
-    "sdk:verify": "tsx scripts/verify-sdk-package.ts \".artifacts/sdk/trading-platform-sdk-$(node -p \"require('./package.json').version\").tgz\""
+    "sdk:verify": "tsx scripts/verify-sdk-package.ts \".artifacts/sdk/trdlabs-sdk-$(node -p \"require('./package.json').version\").tgz\""
   },
   "dependencies": {
     "ajv": "^8.20.0",
@@ -60,5 +60,8 @@
     "ts-json-schema-generator": "^2.9.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -1,4 +1,4 @@
-// @trading-platform/sdk/historical — generic historical.2 HTTP client.
+// @trdlabs/sdk/historical — generic historical.2 HTTP client.
 //
 // Framework-agnostic, self-contained client over the platform's unified historical.2
 // surface (/historical/discover, /historical/coverage, /historical/rows). Wire types are

@@ -1,4 +1,4 @@
-// @trading-platform/sdk — market-data shared contract types (standalone, SDK-owned).
+// @trdlabs/sdk — market-data shared contract types (standalone, SDK-owned).
 //
 // Initiative #2 (Stage 1): these two types previously lived in the SHED research barrel
 // (contract/research/market-tape.ts). The root surface re-exports them, so they are inlined here as

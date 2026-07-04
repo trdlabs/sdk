@@ -1,4 +1,4 @@
-// @trading-platform/sdk/historical — materialized historical contract DTO surface.
+// @trdlabs/sdk/historical — materialized historical contract DTO surface.
 //
 // Standalone copy of the platform CanonicalRow v1/v2 on-disk shape. The SDK owns this
 // DTO outright; it does NOT import platform internals. The conformance harness consumes
