@@ -1,31 +1,58 @@
-# @trading-platform/sdk
+# @trdlabs/sdk
 
-Contract-first, standalone SDK facade over the **trading-platform** consumer surface.
-Public, self-contained package — no platform runtime/build coupling.
+Contract-first, standalone SDK facade over the `trdlabs` trading platform
+consumer surface. The package is self-contained and has no platform runtime or
+build coupling.
 
-## Surface (exports)
+## Install
+
+```bash
+npm install @trdlabs/sdk
+```
+
+## Surface
 
 | Subpath | Contents |
-|---------|----------|
-| `.` | Capabilities + versioning (`SDK_VERSION`, `SDK_CAPABILITIES`, `CONTRACT_VERSION`, `SUPPORTED_CONTRACT_VERSIONS`, `SUPPORTED_MARKET_DATA_KINDS`), historical DTO re-export |
-| `./ops-read` | Ops-read DTOs + `OPS_READ_CONTRACT_VERSION` (bot runs, trades, summaries, operational events, decision log) |
-| `./intake` | Paper-candidate intake client + DTOs + errors |
-| `./intake/http-transport` | HTTP transport for the intake client |
-| `./historical` | `CanonicalRowV2` historical DTO (OHLCV + turnover, OI, funding, liquidations, taker) + field/version constants |
-| `./conformance` | `runHistoricalConformance` — executable conformance harness for the `historical.2` contract (`/historical/rows` byte-identity) |
+| --- | --- |
+| `.` | Capabilities, versioning constants, and historical DTO re-export. |
+| `./ops-read` | Ops-read DTOs and `OPS_READ_CONTRACT_VERSION`. |
+| `./intake` | Paper-candidate intake client, DTOs, and errors. |
+| `./intake/http-transport` | HTTP transport for the intake client. |
+| `./historical` | `CanonicalRowV2` historical DTO and field/version constants. |
+| `./conformance` | `runHistoricalConformance` for the `historical.2` contract. |
+| `./research-contract` | Research contract types and helpers. |
+| `./validation` | Strategy/module validation helpers and schema assets. |
 
-Excluded by design: legacy builder, agent/MCP, and research surfaces (these stay in the platform).
+Excluded by design: platform runtime, live execution authority, exchange
+credentials, agent/MCP orchestration, and raw platform storage access.
+
+## Usage
+
+```ts
+import { SDK_VERSION, SDK_CAPABILITIES } from '@trdlabs/sdk';
+import type { CanonicalRowV2 } from '@trdlabs/sdk/historical';
+
+console.log(SDK_VERSION);
+console.log(SDK_CAPABILITIES.execution); // false
+```
 
 ## Distribution
 
-Released as a **GitHub Release tarball** (not npmjs). Consumers vendor the tarball or install
-from the release URL. Releases are immutable (the release workflow refuses to overwrite an
-existing tag/release).
+The primary public distribution channel is npm:
+
+```bash
+npm install @trdlabs/sdk
+```
+
+Release validation still uses `npm pack` internally so the published package can
+be checked before publication.
 
 ## Versioning
 
-Current: **0.4.0** (sheds legacy builder/agent/research; adds materialized historical DTO +
-self-contained historical conformance). Contract version surfaced via `CONTRACT_VERSION`.
+Current: **0.9.4**.
+
+SDK package versions follow semver. Contract compatibility is surfaced through
+the exported version constants for each contract area.
 
 ## License
 

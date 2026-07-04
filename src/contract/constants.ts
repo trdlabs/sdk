@@ -1,4 +1,4 @@
-// @trading-platform/sdk — contract capability/versioning constants (standalone, SDK-owned).
+// @trdlabs/sdk — contract capability/versioning constants (standalone, SDK-owned).
 //
 // Initiative #2 (Stage 1): the research vendored snapshot (contract/research/**) is SHED. The root
 // surface only needs the capability/versioning constants, so they are inlined here as the SDK's own

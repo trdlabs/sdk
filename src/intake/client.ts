@@ -1,7 +1,7 @@
-// @trading-platform/sdk/intake — transport-agnostic submit helper (feature 036, Phase 9 / T053).
+// @trdlabs/sdk/intake — transport-agnostic submit helper (feature 036, Phase 9 / T053).
 // The consumer supplies an IntakeTransport; this core opens no network, owns no credentials, and holds
 // no execution/deployment authority (FR-035). The optional reference HTTP adapter lives in the separate
-// `@trading-platform/sdk/intake/http-transport` subpath and is never imported by this core.
+// `@trdlabs/sdk/intake/http-transport` subpath and is never imported by this core.
 
 import type { PaperCandidateIntakeRequest, PaperCandidateIntakeResult } from './dto.js';
 

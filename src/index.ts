@@ -1,4 +1,4 @@
-// @trading-platform/sdk — root surface (Initiative #2, standalone public repo).
+// @trdlabs/sdk — root surface (Initiative #2, standalone public repo).
 //
 // Contract-first facade root. Standalone: contract CONSTANTS and TYPES are SDK-owned under
 // ./contract/** (Initiative #2 inlined the capability/versioning surface; the research barrel is
@@ -34,7 +34,7 @@ export type {
 } from './historical/index.js';
 
 /** Version of this SDK package. */
-export const SDK_VERSION = '0.4.0';
+export const SDK_VERSION = '0.9.4';
 
 /**
  * Machine-checkable declaration of capabilities the SDK deliberately does NOT have.

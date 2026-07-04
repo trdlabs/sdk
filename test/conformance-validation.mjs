@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 042 T006 — conformance валидатора kernel: прогон 017-фикстур через published-surface
-// @trading-platform/sdk/validation. valid → НЕ rejected; invalid → rejected.
+// @trdlabs/sdk/validation. valid → НЕ rejected; invalid → rejected.
 // Полный авторитетный оракул — verify_017_* гейты платформы против SDK (Фаза B / check:038);
 // этот harness — pre-release проверка идентичности из самого SDK.
 
@@ -56,6 +56,6 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  `conformance-validation: OK — 017 fixtures conform via @trading-platform/sdk/validation ` +
+  `conformance-validation: OK — 017 fixtures conform via @trdlabs/sdk/validation ` +
     `(known strategies: ${[...knownStrategies].join(', ')})`,
 );

@@ -1,4 +1,4 @@
-// @trading-platform/sdk/intake — own-declared paper-candidate intake DTOs (feature 036, Phase 9 / T051).
+// @trdlabs/sdk/intake — own-declared paper-candidate intake DTOs (feature 036, Phase 9 / T051).
 //
 // Structurally equivalent to the platform's intake wire types (src/admissions/dto.ts) and read view
 // (src/operations/dto.ts). The SDK OWNS this surface (own-declared, NOT vendored via the snapshot) so
