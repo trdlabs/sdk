@@ -34,7 +34,7 @@ export type {
 } from './historical/index.js';
 
 /** Version of this SDK package. */
-export const SDK_VERSION = '0.9.4';
+export const SDK_VERSION = '0.9.5';
 
 /**
  * Machine-checkable declaration of capabilities the SDK deliberately does NOT have.
