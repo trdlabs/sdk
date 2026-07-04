@@ -65,6 +65,13 @@ export interface PaperCandidateIntakeRequest {
   readonly workflowId?: string;
   readonly traceId?: string;
   readonly correlationId?: string;
+  /**
+   * Proposed risk profile (platform 087, additive & optional): a source-suggested
+   * (e.g. lab-WFO) risk profile the platform clamps into its guardrails on promotion
+   * and uses instead of the resolver default. Untrusted — the platform always clamps.
+   * Absence = pre-087 request shape (projected only when present ⇒ fingerprint-compatible).
+   */
+  readonly proposedRiskProfile?: Record<string, unknown> | null;
   /** opaque candidateId OR prior source-scoped idempotency_key. */
   readonly supersedes?: string;
 }

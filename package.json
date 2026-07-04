@@ -1,6 +1,6 @@
 {
   "name": "@trdlabs/sdk",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Contract-first SDK facade over the trading-platform consumer surface (ops-read + paper-intake + capabilities/versioning + conformance harness). Standalone public package; no platform runtime/build coupling.",
   "license": "Apache-2.0",
   "type": "module",
