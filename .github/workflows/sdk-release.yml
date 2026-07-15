@@ -58,12 +58,12 @@ jobs:
         run: |
           test "$(node -p "require('./package.json').version")" = "$VERSION"
 
-      - name: Fail closed if this version is already published to npm
-        run: |
-          if npm view "@trdlabs/sdk@$VERSION" version >/dev/null 2>&1; then
-            echo "::error::@trdlabs/sdk@$VERSION already exists on npm — refusing to republish"
-            exit 1
-          fi
+      # Proceeds ONLY on a confirmed E404. An already-published version fails, and so
+      # does any indeterminate registry/DNS/auth error — we never publish on an
+      # unverified "looks absent" state. Logic is unit-tested (see
+      # test/assert-version-publishable.test.ts).
+      - name: Fail closed unless this version is confirmably absent from npm
+        run: npx tsx scripts/assert-version-publishable.ts "@trdlabs/sdk" "$VERSION"
 
       - name: Refuse if secondary git tag already exists
         run: |
