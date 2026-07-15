@@ -13,6 +13,18 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-15
+
+### Changed
+
+- `historical`: `HistoricalClient` is now resilient by construction (P2-12).
+  Requests get a per-request timeout spanning fetch **and** body read/parse
+  (`timeoutMs`, default 30000), bounded retry with full-jitter capped backoff
+  (`maxAttempts`/`retryBaseMs`/`retryMaxMs`), and `queryRows` fails closed on
+  pagination cycles and on `maxPages`/`maxRows`/`operationDeadlineMs` caps.
+  All new options are optional with safe defaults — no consumer migration
+  required. `SDK_VERSION` now reports `0.10.0`.
+
 ## [0.9.5] - 2026-07-04
 
 ### Added
@@ -105,8 +117,9 @@ tag sequence jumps 0.9.3 → 0.9.5.
   and the sdk-release workflow.
 
 [Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.9.5...HEAD
+[0.10.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.10.0
 [0.9.5]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.5
-[0.9.4]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.5
+[0.9.4]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.9.4
 [0.9.3]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.3
 [0.9.2]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.2
 [0.9.1]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.1

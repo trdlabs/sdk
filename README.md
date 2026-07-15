@@ -49,7 +49,7 @@ be checked before publication.
 
 ## Versioning
 
-Current: **0.9.5**. See [CHANGELOG.md](CHANGELOG.md) for release history.
+Current: **0.10.0**. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 SDK package versions follow semver. Contract compatibility is surfaced through
 the exported version constants for each contract area.
