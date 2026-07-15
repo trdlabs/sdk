@@ -1,18 +1,32 @@
 # Manual SDK release workflow — triggered via workflow_dispatch only.
-# Published assets are IMMUTABLE: fail-closed checks refuse to overwrite an existing
-# tag or GitHub release for the same version.
+#
+# Canonical delivery channel: the public npm registry (`@trdlabs/sdk`).
+# The npm registry is immutable per version, so publishing is the release.
+# A GitHub tag + release is created only as a SECONDARY release note after a
+# successful npm publish — it carries NO consumer tarball and is not a delivery
+# channel. `npm pack` / `sdk:verify` are verification-only, never delivery.
+#
+# Authentication:
+#   Publishing uses the `NPM_TOKEN` repository secret (an npm automation/granular
+#   token scoped to publish `@trdlabs/sdk`), consumed as `NODE_AUTH_TOKEN`. The
+#   token value lives only in GitHub Actions secrets, never in git.
+#   Provenance is generated via GitHub OIDC (`id-token: write`), so the published
+#   version carries a verifiable build attestation.
+#   If/when a trusted publisher (OIDC) is configured for `@trdlabs/sdk` on
+#   npmjs.com, the `NODE_AUTH_TOKEN` env can be dropped in favour of pure OIDC.
 name: SDK Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. 0.4.0)'
+        description: 'Version to publish to npm (must equal package.json version, e.g. 0.10.0)'
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: write   # secondary git tag + release note only
+  id-token: write   # npm provenance attestation (Sigstore via GitHub OIDC)
 
 jobs:
   release:
@@ -25,6 +39,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          registry-url: 'https://registry.npmjs.org'
           cache: npm
 
       - run: npm ci
@@ -35,52 +50,61 @@ jobs:
         run: |
           node -e 'if (!/^\d+\.\d+\.\d+$/.test(process.env.VERSION ?? "")) process.exit(1)'
 
+      - name: Assert package name is @trdlabs/sdk
+        run: |
+          test "$(node -p "require('./package.json').name")" = "@trdlabs/sdk"
+
       - name: Assert package.json version matches input
         run: |
           test "$(node -p "require('./package.json').version")" = "$VERSION"
 
-      - name: Refuse if git tag already exists
+      # Proceeds ONLY on a confirmed E404. An already-published version fails, and so
+      # does any indeterminate registry/DNS/auth error — we never publish on an
+      # unverified "looks absent" state. Logic is unit-tested (see
+      # test/assert-version-publishable.test.ts).
+      - name: Fail closed unless this version is confirmably absent from npm
+        run: npx tsx scripts/assert-version-publishable.ts "@trdlabs/sdk" "$VERSION"
+
+      - name: Refuse if secondary git tag already exists
         run: |
           ! git ls-remote --exit-code --tags origin "refs/tags/sdk-v$VERSION" >/dev/null 2>&1
 
-      - name: Refuse if GitHub release already exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ! gh release view "sdk-v$VERSION" >/dev/null 2>&1
+      # ── Build and verify (verification only — not delivery) ────────────────
 
-      # ── Build and verify ───────────────────────────────────────────────────
+      - name: Test SDK
+        run: npm test
 
       - name: Build SDK
         run: npm run build
 
-      - name: Pack SDK
+      - name: Pack SDK (verification)
         run: npm run sdk:pack
 
-      - name: Verify packed SDK
+      - name: Verify packed SDK (verification)
         run: npm run sdk:verify
 
-      # ── Generate checksum and manifest ─────────────────────────────────────
+      # ── Publish to npm (canonical delivery channel) ────────────────────────
 
-      - name: Generate SHA-256 checksum and release manifest
-        run: |
-          ASSET=".artifacts/sdk/trading-platform-sdk-$VERSION.tgz"
-          SHA256="$(sha256sum "$ASSET" | cut -d' ' -f1)"
-          printf '%s  %s\n' "$SHA256" "$(basename "$ASSET")" > "$ASSET.sha256"
-          npx tsx scripts/sdk-release-manifest.ts \
-            "$VERSION" "$GITHUB_SHA" "$(basename "$ASSET")" "$SHA256" \
-            ".artifacts/sdk/trading-platform-sdk-$VERSION.manifest.json"
+      - name: Publish to npm with provenance
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # ── Create GitHub release (also creates the tag) ───────────────────────
+      # ── Secondary GitHub release NOTE (after successful npm publish) ────────
+      # Not a delivery channel: no package asset is attached. Consumers install
+      # from npm. This only records a human-readable release note + git tag.
 
-      - name: Create GitHub release
+      - name: Create secondary git tag and release note
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "sdk-v$VERSION" \
-            ".artifacts/sdk/trading-platform-sdk-$VERSION.tgz" \
-            ".artifacts/sdk/trading-platform-sdk-$VERSION.tgz.sha256" \
-            ".artifacts/sdk/trading-platform-sdk-$VERSION.manifest.json" \
             --target "$GITHUB_SHA" \
-            --title "@trading-platform/sdk $VERSION" \
-            --notes "Public standalone trading-platform SDK $VERSION"
+            --title "@trdlabs/sdk $VERSION" \
+            --notes "Published to npm (canonical delivery): https://www.npmjs.com/package/@trdlabs/sdk/v/$VERSION
+
+          Install:
+
+              npm install @trdlabs/sdk@$VERSION
+
+          This GitHub release is a secondary release note only. No package archive is attached here — npm is the sole consumer delivery channel."

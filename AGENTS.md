@@ -70,6 +70,14 @@ npm run sdk:verify               # verify packed tarball (run after sdk:pack)
 - Не тянуть platform internals; SDK остаётся standalone facade.
 - Деньги — только `decimal.js`.
 - Перед релизом: `build`, `conformance:validation`, `sdk:pack`, `sdk:verify`.
+- **Канонический канал доставки — npm (`@trdlabs/sdk`), и только он.** Релиз =
+  `npm publish`, а не GitHub-артефакт. Публикация — через workflow **SDK Release**
+  (`.github/workflows/sdk-release.yml`, `workflow_dispatch`), который сам гоняет
+  `npm ci → test → build → sdk:pack → sdk:verify → npm publish --access public --provenance`
+  и fail-closed, если версия уже есть в npm или `package.json` version ≠ input.
+- `npm pack` / `sdk:verify` — **только verification** упаковки перед публикацией,
+  не канал доставки. GitHub tag/release — вторичная release-note без tarball.
+- Реестр npm иммутабелен: ошибка правится новым patch-релизом, не переизданием.
 - Breaking changes — major semver + migration notes + consumer PRs.
 
 ## Downstream consumers
