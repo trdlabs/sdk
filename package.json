@@ -1,6 +1,6 @@
 {
   "name": "@trdlabs/sdk",
-  "version": "0.9.5",
+  "version": "0.10.0",
   "description": "Contract-first SDK facade over the trading-platform consumer surface (ops-read + paper-intake + capabilities/versioning + conformance harness). Standalone public package; no platform runtime/build coupling.",
   "license": "Apache-2.0",
   "type": "module",
@@ -46,6 +46,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsx scripts/gen-research-schemas.ts --check && tsc -p tsconfig.json && tsc -p tsconfig.conformance.json && cp -r src/validation/schemas dist/validation/schemas",
+    "test": "tsx --test --test-force-exit \"test/**/*.test.ts\"",
     "gen:schemas": "tsx scripts/gen-research-schemas.ts",
     "conformance:validation": "node test/conformance-validation.mjs",
     "sdk:pack": "mkdir -p .artifacts/sdk && npm pack --pack-destination .artifacts/sdk",
