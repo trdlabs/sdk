@@ -23,3 +23,20 @@ local status only, no plan duplication.
 Full analysis: control-center
 [`docs/analysis/06-b2c-readiness-report.md`](../../control-center/docs/analysis/06-b2c-readiness-report.md)
 (SDK contract inventory, tenancy gaps, versioning constraints).
+
+## Mock-platform audit (cross-repo, 2026-07-18)
+
+Canonical status lives in the control-center
+[initiative registry](../../control-center/docs/delivery/cross-repo-initiatives.md) —
+local status only, no plan duplication.
+
+- [mock-contract-parity](../../control-center/docs/delivery/initiatives/mock-contract-parity.md) — `proposed`.
+  SDK part: extend `runHistoricalConformance` with the divergence classes the mock
+  currently passes despite — boundary bar (`minute_ts == toMs` must be excluded:
+  half-open `[fromMs, toMs)`), multi-symbol global `(minute_ts, symbol)` ordering,
+  limit clamp. Land the cases red against the unfixed mock first. Become the single
+  harness source (mock currently vendors the platform-repo copy) and the target of
+  mock's pin migration off the legacy `@trading-platform/sdk` 0.9.3 tarball.
+
+Full audit: control-center
+[`docs/analysis/09-mock-platform-audit.md`](../../control-center/docs/analysis/09-mock-platform-audit.md).
