@@ -37,6 +37,13 @@ local status only, no plan duplication.
   limit clamp. Land the cases red against the unfixed mock first. Become the single
   harness source (mock currently vendors the platform-repo copy) and the target of
   mock's pin migration off the legacy `@trading-platform/sdk` 0.9.3 tarball.
+  SDK item 4 delivered ([#22](https://github.com/trdlabs/sdk/pull/22)): the three case
+  groups are in `runHistoricalConformance`, landed red against the unfixed mock, with
+  `test/historical-conformance.test.ts` pinning each divergence class against a reference
+  target. One caveat carries into the mock work — multi-symbol ordering reports a skip on
+  the single-symbol `historical-golden` fixture, so a fail-on-skip gate there needs a
+  two-symbol fixture first. Items 5 (pin / single harness source) and the mock-side fixes
+  stay open.
 
 Full audit: control-center
 [`docs/analysis/09-mock-platform-audit.md`](../../control-center/docs/analysis/09-mock-platform-audit.md).
