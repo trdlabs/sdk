@@ -13,6 +13,32 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+### Added
+
+- `conformance`: `runHistoricalConformance` now covers three `historical.2` semantics
+  the harness previously left untested (control-center initiative
+  `mock-contract-parity`, item 4; audit findings P0-1 / P1-1 / P2-3): the row range is
+  half-open `[fromMs, toMs)` (the bar at `minute_ts == toMs` must not be returned, and
+  `[t, t)` is empty); multi-symbol responses carry a global `(minute_ts ASC, symbol ASC)`
+  total order rather than a per-symbol concatenation in request order; a page never
+  exceeds either the requested `limit` or the `maxPageItems` the target advertises on
+  `/historical/discover` (an available `rows` resource that declares no page cap is now a
+  failure, not a pass), and an oversized `limit` clamps deterministically and losslessly
+  (row-for-row, not just by count) instead of erroring or dropping rows. Note that a real
+  clamp is unobservable on a conformance-sized dataset — the harness also requires an
+  unpaginated request to return every row — so what is asserted is the falsifiable half:
+  the target never serves more than it advertises.
+- `conformance`: pagination is now bounded by two independent guards — a repeated cursor
+  fails fast on its second sighting, and a per-query page budget (`opts.maxPages`,
+  default 10 000) bounds a pager that keeps advancing with fresh cursors.
+- `conformance`: new optional `opts.onSkip` reports checks a target's *dataset* could not
+  exercise (e.g. multi-symbol ordering against a single-symbol fixture) instead of letting
+  them count as passes. Structural limits that hold for every fixture are not reported as
+  skips, so a downstream gate can fail on any non-empty skip list.
+  The return value stays `{ ok: true }` — existing callers are unaffected.
+- `test`: `test/historical-conformance.test.ts` runs the harness against a reference
+  implementation of the platform semantics and asserts it rejects each divergence class.
+
 ## [0.10.0] - 2026-07-15
 
 ### Changed
