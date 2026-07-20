@@ -66,7 +66,7 @@ npm is canonical. A release is an `npm publish`, not a GitHub artifact.
 
 ## Versioning
 
-Current: **0.10.0**. See [CHANGELOG.md](CHANGELOG.md) for release history.
+Current: **0.11.0**. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 SDK package versions follow semver. Contract compatibility is surfaced through
 the exported version constants for each contract area.
