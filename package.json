@@ -3,6 +3,14 @@
   "version": "0.11.0",
   "description": "Contract-first SDK facade over the trading-platform consumer surface (ops-read + paper-intake + capabilities/versioning + conformance harness). Standalone public package; no platform runtime/build coupling.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trdlabs/sdk.git"
+  },
+  "homepage": "https://github.com/trdlabs/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/trdlabs/sdk/issues"
+  },
   "type": "module",
   "exports": {
     ".": {
