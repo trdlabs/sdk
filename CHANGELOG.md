@@ -13,6 +13,8 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-20
+
 ### Added
 
 - `conformance`: `runHistoricalConformance` now covers three `historical.2` semantics
@@ -142,7 +144,8 @@ tag sequence jumps 0.9.3 → 0.9.5.
   conformance harness. Added Apache-2.0 license, README, publish allowlist gate,
   and the sdk-release workflow.
 
-[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.9.5...HEAD
+[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.11.0...HEAD
+[0.11.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.11.0
 [0.10.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.10.0
 [0.9.5]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.5
 [0.9.4]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.9.4
