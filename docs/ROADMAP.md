@@ -16,9 +16,12 @@ local status only, no plan duplication.
   `SizedRiskProfile` — today `sizing.baseOrderUsd` crosses the intake seam untyped
   (`src/intake/dto.ts:78`, `Record<string, unknown>`), and the research-contract
   `RiskProfile` is a different shape with the same name.
-- [b2c-sdk-consolidation](../../control-center/docs/delivery/initiatives/b2c-sdk-consolidation.md) — `proposed`.
-  Receive `@trading-backtester/sdk` (contracts + client + builder) as a `./backtester`
-  subpath with a conformance gate mirroring the intake/ops-read pattern.
+- [b2c-sdk-consolidation](../../control-center/docs/delivery/initiatives/b2c-sdk-consolidation.md) — `enabled`.
+  Settled 2026-07-17 as Option A+ (full merge **rejected** with a revisit trigger):
+  `@trdlabs/backtester-sdk` stays a standalone npm package; no `./backtester` subpath here.
+  Remaining sdk-side stake: type dedup (`Ref`, `RunPeriod`, `BacktestRunRequest` re-sourced
+  from this package). Three-package layout re-confirmed 2026-07-22 by
+  [shared-execution-engine](../../control-center/docs/delivery/initiatives/shared-execution-engine.md).
 
 Full analysis: control-center
 [`docs/analysis/06-b2c-readiness-report.md`](../../control-center/docs/analysis/06-b2c-readiness-report.md)
@@ -47,3 +50,26 @@ local status only, no plan duplication.
 
 Full audit: control-center
 [`docs/analysis/09-mock-platform-audit.md`](../../control-center/docs/analysis/09-mock-platform-audit.md).
+
+## Shared execution engine (cross-repo, 2026-07-22)
+
+Canonical status lives in the control-center
+[initiative registry](../../control-center/docs/delivery/cross-repo-initiatives.md) —
+local status only, no plan duplication.
+
+- [shared-execution-engine](../../control-center/docs/delivery/initiatives/shared-execution-engine.md) — `proposed`.
+  Package-layout decision recorded 2026-07-22: `@trdlabs/sdk` stays the **zero-dependency
+  vocabulary** (contracts, validation, consumer surface); the deterministic execution core
+  ships as a separate public `@trdlabs/engine` that depends on this package — this **revises
+  Q1-083** ("engine-core inside the SDK"; one owner of execution semantics is preserved, only
+  the address changes). `@trdlabs/backtester-sdk` remains standalone (doc 07 A+ upheld).
+  SDK part (Phase 1 of the card):
+  - Separate a **versioned `realityModel`** (fill/fee/slippage/latency — environment
+    properties) out of the 017 `ExecutionProfile` (which keeps intent: order type, TIF,
+    sizing, timeout/cancel). Additive, with a dual-read window per versioning-policy.
+  - Tighten the `object`-typed model slots in `research-contract/risk-execution.ts`
+    (`fillModel`/`feeModel`/`slippageModel`/`latency`) to closed discriminated catalogs
+    (pattern: backtester `engine/profiles.ts`, e.g. `{kind:'fixed_bps', bps}`).
+
+Full analysis: control-center
+[`docs/analysis/10-shared-execution-kernel.md`](../../control-center/docs/analysis/10-shared-execution-kernel.md).
