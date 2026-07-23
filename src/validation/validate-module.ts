@@ -6,7 +6,13 @@
 // гейты (multi_hook/unknown_strategy_ref/separation) добавляются в US2 (T025).
 
 import type { ContractContext } from '../research-contract/catalogs.js';
-import type { ModuleManifest } from '../research-contract/module.js';
+import {
+  DEFAULT_STRATEGY_LIFECYCLE,
+  EVENT_DRIVEN_HOOKS,
+  STRATEGY_LIFECYCLES,
+  type StrategyLifecycle,
+} from '../research-contract/event-driven.js';
+import type { LifecycleHook, ModuleManifest } from '../research-contract/module.js';
 import type { ValidationIssue, ValidationResult } from '../research-contract/validation.js';
 
 import { assemble, makeIssue } from './assemble.js';
@@ -145,6 +151,62 @@ function validateSampleDecisions(
 }
 
 /**
+ * 083 E1 — соответствие набора хуков объявленной ФОРМЕ стратегии (kind:'strategy').
+ *
+ * Две формы разведены нацело, а не сложены: `single_position` — фазовая модель с хуками
+ * `onBarClose`/`onPositionBar`/`onPendingIntentBar`, `event_driven` — актор с единственной точкой
+ * входа `onEvent`. Смешанный набор означает, что автор не понял, какую форму пишет, — отклоняем на
+ * submit'е, а не в рантайме (083 D5: формы строятся строго рядом, не поверх друг друга).
+ */
+function validateLifecycleForm(
+  lifecycle: StrategyLifecycle,
+  hooks: readonly LifecycleHook[],
+  issues: ValidationIssue[],
+): void {
+  if (lifecycle === 'event_driven') {
+    if (!hooks.includes('onEvent')) {
+      issues.push(
+        makeIssue(
+          'lifecycle_form_invalid',
+          'форма event_driven обязана объявлять единственную точку входа onEvent (083 D1)',
+          '/hooks',
+        ),
+      );
+    }
+    hooks.forEach((hook, i) => {
+      if (!(EVENT_DRIVEN_HOOKS as readonly string[]).includes(hook)) {
+        issues.push(
+          makeIssue(
+            'lifecycle_form_invalid',
+            `хук "${hook}" принадлежит фазовой модели single_position и недопустим в форме event_driven`,
+            `/hooks/${i}`,
+          ),
+        );
+      }
+    });
+    return;
+  }
+
+  // single_position: минимальный alpha-хук обязателен (FR-004); точка входа актора недопустима.
+  if (!hooks.includes('onBarClose')) {
+    issues.push(
+      makeIssue('schema_invalid', 'strategy-модуль обязан объявлять хук onBarClose (FR-004)', '/hooks'),
+    );
+  }
+  hooks.forEach((hook, i) => {
+    if (hook === 'onEvent') {
+      issues.push(
+        makeIssue(
+          'lifecycle_form_invalid',
+          'хук onEvent принадлежит форме event_driven и недопустим в single_position',
+          `/hooks/${i}`,
+        ),
+      );
+    }
+  });
+}
+
+/**
  * Провалидировать submit модуля. Чистая функция: `(input + contractContext + registry) → ValidationResult`.
  * Аккумулирует ПОЛНЫЙ набор причин (FR-022); `normalized` прикрепляется только при отсутствии error.
  */
@@ -180,16 +242,33 @@ export function validateModule(
     );
   }
 
-  // 4. Хуки и kind-специфичные правила.
+  // 4. Хуки и kind-специфичные правила; для strategy — с учётом объявленной формы (083 E1).
   const hooks = Array.isArray(manifest.hooks) ? manifest.hooks : [];
-  if (manifest.kind === 'strategy') {
-    // Обязательность onBarClose для strategy (минимальный alpha-хук, FR-004).
-    if (!hooks.includes('onBarClose')) {
+  const declaredLifecycle: unknown = manifest.lifecycle;
+  // Значение вне каталога ловит схема (enum) — форму по нему не проверяем, она бессмысленна.
+  const lifecycleKnown =
+    declaredLifecycle === undefined ||
+    STRATEGY_LIFECYCLES.includes(declaredLifecycle as StrategyLifecycle);
+  const lifecycle: StrategyLifecycle = lifecycleKnown
+    ? ((declaredLifecycle as StrategyLifecycle | undefined) ?? DEFAULT_STRATEGY_LIFECYCLE)
+    : DEFAULT_STRATEGY_LIFECYCLE;
+
+  if (manifest.kind === 'strategy' && lifecycleKnown) {
+    validateLifecycleForm(lifecycle, hooks, issues);
+  } else if (manifest.kind === 'overlay') {
+    // Overlay перехватывает решение фазовой модели; event-driven overlay в v1 не существует (083 §5).
+    if (lifecycleKnown && lifecycle !== 'single_position') {
       issues.push(
-        makeIssue('schema_invalid', 'strategy-модуль обязан объявлять хук onBarClose (FR-004)', '/hooks'),
+        makeIssue(
+          'lifecycle_form_invalid',
+          `overlay не может объявлять форму "${lifecycle}" (перехват определён только для single_position)`,
+          '/lifecycle',
+        ),
       );
     }
-  } else if (manifest.kind === 'overlay') {
+  }
+
+  if (manifest.kind === 'overlay') {
     // Overlay вмешивается в РОВНО ОДНОЙ точке перехвата (FR-002, US2-AC2).
     if (hooks.length > 1) {
       issues.push(

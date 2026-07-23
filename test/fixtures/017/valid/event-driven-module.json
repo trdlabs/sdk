@@ -1,0 +1,27 @@
+{
+  "manifest": {
+    "id": "grid_maker",
+    "version": "0.1.0",
+    "kind": "strategy",
+    "name": "Grid maker",
+    "summary": "Сетка лимиток вокруг цены с переставлением по таймеру",
+    "rationale": "Order-flow-логика невыразима в позиционных решениях: нужны place/cancel и таймеры.",
+    "author": "agent",
+    "contractVersion": "017.3",
+    "status": "research_only",
+    "lifecycle": "event_driven",
+    "paramsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["levels", "stepPct"],
+      "properties": {
+        "levels": { "type": "number" },
+        "stepPct": { "type": "number" }
+      }
+    },
+    "params": { "levels": 4, "stepPct": 0.25 },
+    "capabilities": { "platformSdk": true },
+    "dataNeeds": { "closedCandlesUpToCurrent": true },
+    "hooks": ["init", "onEvent", "dispose"]
+  }
+}

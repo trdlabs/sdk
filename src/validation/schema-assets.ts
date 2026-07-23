@@ -13,7 +13,9 @@ export type CoreSchemaName =
   | 'overlay-decision'
   | 'backtest-run-request'
   | 'validation-result'
-  | 'reality-model';
+  | 'reality-model'
+  | 'actor-input-event'
+  | 'actor-command';
 
 /** Имя core-схемы → имя JSON-файла. */
 export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
@@ -23,6 +25,8 @@ export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
   'backtest-run-request': 'backtest-run-request.schema.json',
   'validation-result': 'validation-result.schema.json',
   'reality-model': 'reality-model.schema.json',
+  'actor-input-event': 'actor-input-event.schema.json',
+  'actor-command': 'actor-command.schema.json',
 };
 
 /** `$id` каждой core-схемы (parity-anchor). */
@@ -33,6 +37,8 @@ export const SCHEMA_IDS: Readonly<Record<CoreSchemaName, string>> = {
   'backtest-run-request': 'https://trading-platform/017/backtest-run-request.schema.json',
   'validation-result': 'https://trading-platform/017/validation-result.schema.json',
   'reality-model': 'https://trading-platform/017/reality-model.schema.json',
+  'actor-input-event': 'https://trading-platform/017/actor-input-event.schema.json',
+  'actor-command': 'https://trading-platform/017/actor-command.schema.json',
 };
 
 const SCHEMAS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'schemas', '017');

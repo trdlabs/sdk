@@ -1,0 +1,192 @@
+{
+  "$id": "https://trading-platform/017/actor-command.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/ActorCommand",
+  "definitions": {
+    "ActorCommand": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ActorPlaceCommand"
+        },
+        {
+          "$ref": "#/definitions/ActorCancelCommand"
+        },
+        {
+          "$ref": "#/definitions/ActorTimerSetCommand"
+        },
+        {
+          "$ref": "#/definitions/ActorTimerCancelCommand"
+        },
+        {
+          "$ref": "#/definitions/ActorAnnotateCommand"
+        }
+      ],
+      "description": "Замкнутый union команд актора."
+    },
+    "ActorPlaceCommand": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "place"
+        },
+        "clientOrderId": {
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/definitions/OrderSide"
+        },
+        "type": {
+          "$ref": "#/definitions/OrderType"
+        },
+        "qtyUsd": {
+          "type": "number",
+          "description": "Запрашиваемый нотионал в USD (до клампа риском)."
+        },
+        "price": {
+          "type": "number",
+          "description": "Лимитная цена (для `limit`)."
+        },
+        "stopPrice": {
+          "type": "number",
+          "description": "Триггерная цена (для `stop_market`)."
+        },
+        "tif": {
+          "$ref": "#/definitions/TimeInForce"
+        },
+        "reduceOnly": {
+          "type": "boolean",
+          "description": "Заявка только уменьшает экспозицию; проходит и в состоянии REDUCING."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "clientOrderId",
+        "side",
+        "type",
+        "qtyUsd"
+      ],
+      "additionalProperties": false,
+      "description": "Подать заявку. `clientOrderId` — свой, детерминированный (от seed/счётчика); повтор уже живого ID — ошибка хоста, а не молчаливая замена. `qtyUsd` — ПРОСЬБА: RiskEngine клампит или отказывает (`order.denied`)."
+    },
+    "OrderSide": {
+      "type": "string",
+      "enum": [
+        "buy",
+        "sell"
+      ],
+      "description": "Сторона заявки. Отдельно от `'long' | 'short'` решений 017: заявка — buy/sell, не позиция."
+    },
+    "OrderType": {
+      "type": "string",
+      "enum": [
+        "market",
+        "limit",
+        "stop_market"
+      ],
+      "description": "Тип заявки, которым выражается намерение исполнения (вокабуляр 083 `ActorCommand.type`)."
+    },
+    "TimeInForce": {
+      "type": "string",
+      "enum": [
+        "gtc",
+        "ioc"
+      ],
+      "description": "Time-in-force заявки (вокабуляр 083 `ActorCommand.tif`)."
+    },
+    "ActorCancelCommand": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "cancel"
+        },
+        "clientOrderId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "clientOrderId"
+      ],
+      "additionalProperties": false,
+      "description": "Отменить свою заявку по её `clientOrderId`. `modify` в v1 нет — place-after-cancel (Q3)."
+    },
+    "ActorTimerSetCommand": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "timer.set"
+        },
+        "timerId": {
+          "type": "string"
+        },
+        "atTs": {
+          "type": "number"
+        },
+        "afterMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "timerId"
+      ],
+      "additionalProperties": false,
+      "description": "Поставить таймер: либо на абсолютный business_ts (`atTs`), либо через `afterMs` от `ts` события."
+    },
+    "ActorTimerCancelCommand": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "timer.cancel"
+        },
+        "timerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "timerId"
+      ],
+      "additionalProperties": false,
+      "description": "Снять ранее поставленный таймер."
+    },
+    "ActorAnnotateCommand": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "annotate"
+        },
+        "note": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "Только метаданные в трассу — без действия (аналог `AnnotateDecision` в 017)."
+    }
+  },
+  "title": "ActorCommand"
+}

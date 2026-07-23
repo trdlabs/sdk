@@ -35,6 +35,8 @@ export type ValidationCode =
   // Владеет слотами `feeModel`/`slippageModel`/`fundingModel`/`latency`/`partialFill`;
   // слот `fillModel` сохраняет свой более специфичный код `unsupported_fill_model_kind` (024).
   | 'unsupported_reality_model_kind'
+  // --- error (083 E1, аддитивно; соответствие набора хуков объявленной форме стратегии) ---
+  | 'lifecycle_form_invalid'
   // --- warning ---
   | 'empty_baseline_variant_diff';
 

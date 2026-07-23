@@ -1,0 +1,18 @@
+{
+  "manifest": {
+    "id": "actor_without_entry_point",
+    "version": "0.1.0",
+    "kind": "strategy",
+    "name": "Actor without entry point",
+    "summary": "Объявляет форму актора без единственной точки входа onEvent",
+    "rationale": "Негативная фикстура: форма event_driven без onEvent неисполнима.",
+    "author": "agent",
+    "contractVersion": "017.3",
+    "status": "research_only",
+    "lifecycle": "event_driven",
+    "paramsSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+    "capabilities": { "platformSdk": true },
+    "dataNeeds": { "closedCandlesUpToCurrent": true },
+    "hooks": ["init", "dispose"]
+  }
+}

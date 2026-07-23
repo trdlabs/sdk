@@ -1,0 +1,18 @@
+{
+  "manifest": {
+    "id": "mixed_form_strategy",
+    "version": "0.1.0",
+    "kind": "strategy",
+    "name": "Mixed form",
+    "summary": "Объявляет форму актора, но несёт хуки фазовой модели",
+    "rationale": "Негативная фикстура: смешанный набор хуков означает, что форма не выбрана.",
+    "author": "agent",
+    "contractVersion": "017.3",
+    "status": "research_only",
+    "lifecycle": "event_driven",
+    "paramsSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+    "capabilities": { "platformSdk": true },
+    "dataNeeds": { "closedCandlesUpToCurrent": true },
+    "hooks": ["onEvent", "onBarClose"]
+  }
+}

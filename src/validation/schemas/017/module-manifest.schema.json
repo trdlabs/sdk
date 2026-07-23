@@ -36,6 +36,10 @@
         "status": {
           "$ref": "#/definitions/ModuleStatus"
         },
+        "lifecycle": {
+          "$ref": "#/definitions/StrategyLifecycle",
+          "description": "083 E1 (аддитивно) — объявленная ФОРМА стратегии. Отсутствует ⇒ `single_position`: манифест без этого поля описывает ровно ту же стратегию, что и до 083 (SC-008). Валидатор проверяет соответствие объявленной формы набору хуков (`lifecycle_form_invalid`); исполнение формы — зона рантайма (083 E2–E3), не 017."
+        },
         "paramsSchema": {
           "type": "object",
           "description": "Произвольная JSON Schema объявленных параметров (FR-034)."
@@ -107,6 +111,14 @@
         "promoted"
       ],
       "description": "Статус неизменяемой версии модуля; forward-only автомат (data-model §14)."
+    },
+    "StrategyLifecycle": {
+      "type": "string",
+      "enum": [
+        "single_position",
+        "event_driven"
+      ],
+      "description": "Объявленная форма стратегии. Дефолт — `single_position`: манифест без поля `lifecycle` описывает ровно ту же стратегию, что и до 083 (back-compat, SC-008)."
     },
     "CapabilityDeclaration": {
       "type": "object",
@@ -195,9 +207,10 @@
         "onPositionBar",
         "onPendingIntentBar",
         "dispose",
-        "apply"
+        "apply",
+        "onEvent"
       ],
-      "description": "Закрытый набор lifecycle-хуков, курируемый платформой (FR-004, data-model §5)."
+      "description": "Закрытый набор lifecycle-хуков, курируемый платформой (FR-004, data-model §5).\n\n083 E1 (аддитивно): `onEvent` — единственная точка входа формы `event_driven`. Добавлен В КОНЕЦ (порядок существующих хуков не сдвигается — байт-идентичность нормализованных манифестов)."
     }
   },
   "title": "ModuleManifest"

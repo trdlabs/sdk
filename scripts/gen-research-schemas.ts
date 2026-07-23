@@ -49,6 +49,9 @@ const TARGETS: ReadonlyArray<Target> = [
   target('BacktestRunRequest', 'run.ts', 'backtest-run-request.schema.json', 'BacktestRunRequest'),
   target('ValidationResult', 'validation.ts', 'validation-result.schema.json', 'ValidationResult'),
   target('RealityModel', 'reality-model.ts', 'reality-model.schema.json', 'RealityModel'),
+  // 083 E1: обе стороны конверта «событие → команды», пересекающего JSON-границу изолята.
+  target('ActorInputEvent', 'event-driven.ts', 'actor-input-event.schema.json', 'ActorInputEvent'),
+  target('ActorCommand', 'event-driven.ts', 'actor-command.schema.json', 'ActorCommand'),
 ];
 
 /**
