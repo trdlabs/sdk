@@ -1,0 +1,477 @@
+{
+  "$id": "https://trading-platform/017/actor-input-event.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/ActorInputEvent",
+  "definitions": {
+    "ActorInputEvent": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ActorBarEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorOrderAcceptedEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorOrderDeniedEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorOrderRejectedEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorOrderCanceledEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorOrderExpiredEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorFillEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorTimerEvent"
+        }
+      ],
+      "description": "Замкнутый union входных событий актора."
+    },
+    "ActorBarEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "bar"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "bar": {
+          "$ref": "#/definitions/Bar"
+        },
+        "closedCandles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Bar"
+          },
+          "description": "Закрытые свечи строго ДО `bar`, не более объявленного статического max-lookback."
+        },
+        "market": {
+          "$ref": "#/definitions/FlatMarketSlice"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "bar"
+      ],
+      "additionalProperties": false,
+      "description": "Закрытие бара. Несёт окно закрытых свечей: у актора нет `data`-API — всё, что он может прочитать о прошлом, приходит в конверте. Forward-поверхности нет структурно (FR-011)."
+    },
+    "Bar": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "number"
+        },
+        "open": {
+          "type": "number"
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        },
+        "close": {
+          "type": "number"
+        },
+        "volume": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+      ],
+      "additionalProperties": false,
+      "description": "Закрытая (исторически завершённая) свеча."
+    },
+    "FlatMarketSlice": {
+      "type": "object",
+      "properties": {
+        "oi": {
+          "$ref": "#/definitions/OiPoint"
+        },
+        "liq": {
+          "$ref": "#/definitions/LiqPoint"
+        },
+        "funding": {
+          "$ref": "#/definitions/FundingReading"
+        },
+        "taker": {
+          "$ref": "#/definitions/TakerReading"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Плоский point-in-time рыночный срез, прикладываемый к `bar`-событию. В отличие от `PointInTimeMarketApi` (017/023, методы) — ЧИСТЫЕ ДАННЫЕ: конверт события пересекает JSON-границу изолята, функции через неё не проходят.\n\nСлот присутствует по тому же composition-following правилу, что и `StrategyContext.market`: по составу ленты, а НЕ по декларации `dataNeeds` (FR-010)."
+    },
+    "OiPoint": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "number"
+        },
+        "oiTotalUsd": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "oiTotalUsd"
+      ],
+      "additionalProperties": false,
+      "description": "Точка OI as-of минуты (read-only)."
+    },
+    "LiqPoint": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "number"
+        },
+        "longUsd": {
+          "type": "number"
+        },
+        "shortUsd": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "longUsd",
+        "shortUsd"
+      ],
+      "additionalProperties": false,
+      "description": "Точка liquidations as-of минуты (read-only). Покрытая-без-событий → {0,0}."
+    },
+    "FundingReading": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "present"
+            },
+            "point": {
+              "$ref": "#/definitions/FundingPoint"
+            }
+          },
+          "required": [
+            "state",
+            "point"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "stale"
+            },
+            "point": {
+              "$ref": "#/definitions/FundingPoint"
+            }
+          },
+          "required": [
+            "state",
+            "point"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "missing"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "030 — freshness-aware funding reading для текущей закрытой минуты `t`. **3-state** (`present|stale|missing`); `unsupported` — НЕ reading-состояние (выражается через отсутствие метода + coverage). `present`/`stale` несут реальный снимок (`ts ≤ t`); `stale` = bounded live-forward (FR-007), НЕ запрещённый carry-forward. `missing` — нет снимка `ts ≤ t` (не подменяется нулём)."
+    },
+    "FundingPoint": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "number"
+        },
+        "fundingRate": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "fundingRate"
+      ],
+      "additionalProperties": false,
+      "description": "030 — точка funding as-of минуты (read-only). `ts` реального снимка, `ts ≤ t` (возраст = `t − ts`)."
+    },
+    "TakerReading": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "present"
+            },
+            "point": {
+              "$ref": "#/definitions/TakerPoint"
+            }
+          },
+          "required": [
+            "state",
+            "point"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "stale"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "missing"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "030 — taker reading за минутный бакет `[t, t+60s)`. **3-state** (`present|stale|missing`); `unsupported` — НЕ reading-состояние. `present` несёт raw `{buyUsd,sellUsd}` (вкл. present-zero `{0,0}`); `stale` — незавершённый бакет (point НЕ несётся, без carry-forward); `missing` — gap (не ноль)."
+    },
+    "TakerPoint": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "number"
+        },
+        "buyUsd": {
+          "type": "number"
+        },
+        "sellUsd": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "buyUsd",
+        "sellUsd"
+      ],
+      "additionalProperties": false,
+      "description": "030 — точка raw taker flow за минутный бакет (read-only). delta = `buyUsd − sellUsd` (derived)."
+    },
+    "ActorOrderAcceptedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "order.accepted"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка принята средой (venue/симулятором)."
+    },
+    "ActorOrderDeniedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "order.denied"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка отклонена ЛОКАЛЬНО, до среды: RiskEngine (кламп не спас — потолок, rate-limit, price-band, reduce-only в REDUCING). Терминальный. Отличим от `order.rejected` намеренно."
+    },
+    "ActorOrderRejectedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "order.rejected"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка отклонена СРЕДОЙ (venue/симулятор). Терминальный."
+    },
+    "ActorOrderCanceledEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "order.canceled"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка отменена (по команде `cancel` либо средой). Терминальный."
+    },
+    "ActorOrderExpiredEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "order.expired"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка истекла по TIF/сроку. Терминальный."
+    },
+    "ActorFillEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "fill"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "clientOrderId": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        },
+        "qty": {
+          "type": "number",
+          "description": "Исполненный размер в базовой валюте инструмента."
+        },
+        "fee": {
+          "type": "number"
+        },
+        "last": {
+          "type": "boolean",
+          "description": "Последний филл заявки (заявка перешла в терминальный `filled`)."
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId",
+        "price",
+        "qty",
+        "fee",
+        "last"
+      ],
+      "additionalProperties": false,
+      "description": "Исполнение (полное либо частичное — различает `last`). Инвариант state-before-handler: `ctx.position()`/`ctx.orders.open()` УЖЕ учитывают этот филл к моменту вызова хендлера."
+    },
+    "ActorTimerEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "timer"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "timerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "timerId"
+      ],
+      "additionalProperties": false,
+      "description": "Срабатывание таймера, поставленного командой `timer.set`. Таймерами владеет ХОСТ: у изолята нет часов. В backtest/paper время двигают бары, в live дополнительно wall-clock-тик — business_ts события в обоих случаях из ленты, нового недетерминизма нет."
+    }
+  },
+  "title": "ActorInputEvent"
+}

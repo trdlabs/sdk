@@ -26,6 +26,7 @@ export const CODE_SEVERITY: Readonly<Record<ValidationCode, Severity>> = {
   missing_required_market_data: 'error',
   unsupported_fill_model_kind: 'error',
   unsupported_reality_model_kind: 'error',
+  lifecycle_form_invalid: 'error',
   empty_baseline_variant_diff: 'warning',
 };
 

@@ -82,6 +82,17 @@ local status only, no plan duplication.
   dual-read window closes only after platform, backtester and lab consume the split form.
   Consumers were not migrated: no repo imports `ExecutionProfile` from this package today
   (`backtester` declares its own copy in `packages/research-contracts` — a dedup target).
+- Phase 6 of the same card, **early-start exception recorded 2026-07-23**: E1 of platform epic 083
+  (`specs/083-event-driven-runtime-spike`) — **delivered in 0.13.0**
+  ([#27](https://github.com/trdlabs/sdk/pull/27)). The additive `event_driven` kernel contract:
+  `lifecycle` on `ModuleManifest` (default `single_position`), the
+  `StrategyActor`/`ActorInputEvent`/`ActorCommand`/`ActorContext` vocabulary, the form validator
+  (`lifecycle_form_invalid`), the `defineActor` sugar, and JSON schemas for both sides of the
+  isolate envelope. `CONTRACT_VERSION` `017.2` → `017.3`, prior versions still supported.
+
+  E2–E7 stay behind the epic's return trigger and behind Ф3 — nothing in this SDK release executes
+  an actor. What E1 buys now is that `lab` can build event-driven authoring against a vocabulary
+  that will not move under it.
 
 Full analysis: control-center
 [`docs/analysis/10-shared-execution-kernel.md`](../../control-center/docs/analysis/10-shared-execution-kernel.md).

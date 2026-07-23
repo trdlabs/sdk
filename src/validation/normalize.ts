@@ -12,11 +12,12 @@ import type {
   PromotionRequest,
   ReviewDecision,
 } from '../research-contract/module.js';
+import { DEFAULT_STRATEGY_LIFECYCLE, type StrategyLifecycle } from '../research-contract/event-driven.js';
 import type { RealityModel, RealityModelSlotName } from '../research-contract/reality-model.js';
 import { REALITY_MODEL_SLOTS } from '../research-contract/reality-model.js';
 import type { BacktestRunRequest, Ref, RunPeriod } from '../research-contract/run.js';
 
-/** Канонический порядок lifecycle-хуков (data-model §5). */
+/** Канонический порядок lifecycle-хуков (data-model §5). 083 E1: `onEvent` — append-в-конце. */
 const HOOK_ORDER: readonly LifecycleHook[] = [
   'init',
   'onBarClose',
@@ -24,6 +25,7 @@ const HOOK_ORDER: readonly LifecycleHook[] = [
   'onPendingIntentBar',
   'dispose',
   'apply',
+  'onEvent',
 ];
 
 /**
@@ -48,6 +50,12 @@ export interface NormalizedManifest {
   readonly params: object;
   readonly targetStrategyRef?: string;
   readonly interceptionPoint?: string;
+  /**
+   * 083 E1 — форма стратегии, ТОЛЬКО если объявлена явно. Манифест без `lifecycle` проецируется
+   * байт-в-байт как до 083 (его форма — дефолтный `single_position`, `DEFAULT_STRATEGY_LIFECYCLE`):
+   * подстановка дефолта сдвинула бы проекции всех существующих модулей и их content-hash'и.
+   */
+  readonly lifecycle?: StrategyLifecycle;
 }
 
 function declaredFlags(
@@ -63,7 +71,12 @@ function canonicalHooks(hooks: readonly LifecycleHook[]): readonly LifecycleHook
   return HOOK_ORDER.filter((h) => present.has(h));
 }
 
-/** Построить детерминированный `NormalizedManifest` из принятого манифеста. */
+/**
+ * Построить детерминированный `NormalizedManifest` из принятого манифеста.
+ *
+ * `lifecycle` дописывается В КОНЕЦ и только при явном объявлении — см. поле в `NormalizedManifest`.
+ * Форму манифеста без него читать через `DEFAULT_STRATEGY_LIFECYCLE`.
+ */
 export function normalizeManifest(manifest: ModuleManifest): NormalizedManifest {
   const base: NormalizedManifest = {
     id: manifest.id,
@@ -78,14 +91,17 @@ export function normalizeManifest(manifest: ModuleManifest): NormalizedManifest 
     paramsSchema: manifest.paramsSchema,
     params: manifest.params ?? {},
   };
-  if (manifest.kind === 'overlay') {
-    return {
-      ...base,
-      targetStrategyRef: manifest.targetStrategyRef,
-      interceptionPoint: manifest.interceptionPoint,
-    };
-  }
-  return base;
+  const withKind: NormalizedManifest =
+    manifest.kind === 'overlay'
+      ? {
+          ...base,
+          targetStrategyRef: manifest.targetStrategyRef,
+          interceptionPoint: manifest.interceptionPoint,
+        }
+      : base;
+  return manifest.lifecycle !== undefined
+    ? { ...withKind, lifecycle: manifest.lifecycle }
+    : withKind;
 }
 
 /**

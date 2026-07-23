@@ -13,6 +13,70 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-23
+
+Feature E1 of platform epic 083 (`specs/083-event-driven-runtime-spike`) — the kernel contract for
+strategies shaped as stateful actors over order flow. Landed ahead of the epic's return trigger
+under the early-start exception recorded 2026-07-23 in the `shared-execution-engine` card (Ф6):
+E1 is purely additive vocabulary, changes no runtime in any repo, and leaves every existing bundle
+valid under the default `single_position`. E2–E7 (isolate dispatch boundary, engine, order-flow
+RiskEngine, event spine) stay behind the trigger — nothing here executes anything.
+`CONTRACT_VERSION` moves `017.2` → `017.3`; `017.1` and `017.2` manifests stay supported.
+
+### Added
+
+- `research-contract`: **`lifecycle`** on `ModuleManifest` — the declared *shape* of a strategy,
+  `'single_position' | 'event_driven'`. Absent means `single_position`, so a manifest written
+  before 083 describes exactly the same strategy it always did (SC-008).
+- `research-contract`: the actor vocabulary (`src/research-contract/event-driven.ts`) —
+  `StrategyActor` (one entry point, `onEvent`), `ActorInputEvent` (`bar`, `order.accepted` /
+  `denied` / `rejected` / `canceled` / `expired`, `fill`, `timer`), `ActorCommand` (`place`,
+  `cancel`, `timer.set`, `timer.cancel`, `annotate`), `ActorContext`, `EventDrivenModule`,
+  plus the `OpenOrderView` / `PositionView` / `FlatMarketSlice` shapes the envelope carries.
+  Three 083 decisions are load-bearing in these types: the strategy mints its own
+  `clientOrderId` (OrderTicket without a handle across the isolate's JSON boundary); size is an
+  explicit `qtyUsd` *request* that the RiskEngine clamps rather than an indirect hint (Q2); and
+  `modify` is deliberately absent in v1 — place-after-cancel keeps the FSM and its proof small
+  (Q3). `order.denied` (local risk refusal) stays distinct from `order.rejected` (venue refusal).
+- `research-contract`: **`defineActor(handlers)`** — sugar that compiles per-kind handlers into
+  the single `onEvent` of the kernel contract, so the contract itself stays narrow (the LEAN
+  `IAlgorithm` lesson). A specific handler wins over the catch-all `onEvent`; an unhandled kind
+  yields an empty batch; an unknown kind throws rather than being silently dropped. Dispatch is
+  an explicit switch over the closed union — no object iteration, no computed method names, as
+  the engine's determinism definition requires.
+- `research-contract`: `onEvent` added to `LifecycleHook` (appended last, so the canonical hook
+  order of existing manifests does not shift), plus `STRATEGY_LIFECYCLES`,
+  `DEFAULT_STRATEGY_LIFECYCLE`, `EVENT_DRIVEN_HOOKS`, `SINGLE_POSITION_ONLY_HOOKS`,
+  `ACTOR_INPUT_EVENT_KINDS`, `ACTOR_COMMAND_KINDS`.
+- `validation`: form validator for the declared shape — new code `lifecycle_form_invalid`. The two
+  shapes are kept disjoint rather than layered: `event_driven` must declare `onEvent` and may not
+  carry the phase-model hooks, `single_position` must declare `onBarClose` (unchanged) and may not
+  carry `onEvent`, and an overlay may not declare the actor shape at all (interception is defined
+  only for the phase model). A mixed hook set means the author has not chosen a shape — rejected
+  at submit time rather than at runtime (083 D5: the shapes are built beside each other, never on
+  top of each other).
+- `validation`: two more bundled schemas, `actor-input-event.schema.json` and
+  `actor-command.schema.json` — both sides of the `event-in → commands-out` envelope that crosses
+  the isolate's JSON boundary, so a host can validate an untrusted command batch against the same
+  literal the types are generated from. Reachable through `schemaAsset` / `SCHEMA_IDS` /
+  `validateCore`. They are wire forms, not submit-time artifacts, so `validate()` gains no arm
+  for them.
+
+### Changed
+
+- `research-contract`: `CONTRACT_VERSION` `017.2` → `017.3` (the manifest envelope gained
+  `lifecycle` and `onEvent`); `SUPPORTED_CONTRACT_VERSIONS` appends `017.3`, so `017.1` and
+  `017.2` manifests keep validating — their shape is the default `single_position`.
+- `validation`: `NormalizedManifest` echoes `lifecycle` **only when it was declared explicitly**,
+  appended last. Substituting the default would shift the projection — and the content hash — of
+  every module that predates 083; read an absent field through `DEFAULT_STRATEGY_LIFECYCLE`.
+
+### Migration
+
+None. No consumer has to move and no existing bundle changes meaning. Authoring an
+`event_driven` module is opt-in and, until 083 E2–E3 land, nothing executes one — the value of
+shipping E1 now is that `lab` can prepare event-driven authoring against a stable vocabulary.
+
 ## [0.12.0] - 2026-07-23
 
 Phase 1 of the cross-repo initiative `shared-execution-engine` (control-center
@@ -210,7 +274,8 @@ tag sequence jumps 0.9.3 → 0.9.5.
   conformance harness. Added Apache-2.0 license, README, publish allowlist gate,
   and the sdk-release workflow.
 
-[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.12.0...HEAD
+[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.13.0...HEAD
+[0.13.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.13.0
 [0.12.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.12.0
 [0.11.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.11.0
 [0.10.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.10.0

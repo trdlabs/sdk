@@ -93,6 +93,7 @@
         "missing_required_market_data",
         "unsupported_fill_model_kind",
         "unsupported_reality_model_kind",
+        "lifecycle_form_invalid",
         "empty_baseline_variant_diff"
       ],
       "description": "Полная таксономия машиночитаемых кодов валидации (data-model §13.2). Error-коды блокируют приём; warning-коды — нет."

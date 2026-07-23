@@ -3,6 +3,7 @@
 
 import type { OverlayDecision, StrategyDecision } from './decision.js';
 import type { StrategyContext } from './context.js';
+import type { StrategyLifecycle } from './event-driven.js';
 import type { Ref } from './run.js';
 
 /** Статус неизменяемой версии модуля; forward-only автомат (data-model §14). */
@@ -14,14 +15,20 @@ export type ModuleKind = 'strategy' | 'overlay';
 /** Происхождение автора — метаданные, НЕ привилегия (FR-030). */
 export type Author = 'human' | 'agent';
 
-/** Закрытый набор lifecycle-хуков, курируемый платформой (FR-004, data-model §5). */
+/**
+ * Закрытый набор lifecycle-хуков, курируемый платформой (FR-004, data-model §5).
+ *
+ * 083 E1 (аддитивно): `onEvent` — единственная точка входа формы `event_driven`. Добавлен В КОНЕЦ
+ * (порядок существующих хуков не сдвигается — байт-идентичность нормализованных манифестов).
+ */
 export type LifecycleHook =
   | 'init'
   | 'onBarClose'
   | 'onPositionBar'
   | 'onPendingIntentBar'
   | 'dispose'
-  | 'apply';
+  | 'apply'
+  | 'onEvent';
 
 /**
  * Объявленные возможности модуля (FR-018, data-model §13.3). Любая из закрытого набора запрещённых
@@ -84,6 +91,13 @@ export interface ModuleManifest {
   readonly source?: string;
   readonly contractVersion: string;
   readonly status: ModuleStatus;
+  /**
+   * 083 E1 (аддитивно) — объявленная ФОРМА стратегии. Отсутствует ⇒ `single_position`: манифест
+   * без этого поля описывает ровно ту же стратегию, что и до 083 (SC-008). Валидатор проверяет
+   * соответствие объявленной формы набору хуков (`lifecycle_form_invalid`); исполнение формы —
+   * зона рантайма (083 E2–E3), не 017.
+   */
+  readonly lifecycle?: StrategyLifecycle;
   /** Произвольная JSON Schema объявленных параметров (FR-034). */
   readonly paramsSchema: object;
   /** Payload параметров (валидируется против `paramsSchema`). */

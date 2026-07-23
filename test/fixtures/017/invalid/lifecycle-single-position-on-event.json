@@ -1,0 +1,17 @@
+{
+  "manifest": {
+    "id": "phase_strategy_with_on_event",
+    "version": "0.1.0",
+    "kind": "strategy",
+    "name": "Phase strategy with onEvent",
+    "summary": "Фазовая стратегия, объявляющая точку входа актора",
+    "rationale": "Негативная фикстура: onEvent недопустим в дефолтной форме single_position.",
+    "author": "agent",
+    "contractVersion": "017.2",
+    "status": "research_only",
+    "paramsSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+    "capabilities": { "platformSdk": true },
+    "dataNeeds": { "closedCandlesUpToCurrent": true },
+    "hooks": ["onBarClose", "onEvent"]
+  }
+}
