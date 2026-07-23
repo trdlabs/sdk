@@ -32,6 +32,12 @@ export interface BacktestRunRequest {
   /** Обязателен, если конфиг способен открыть позицию (FR-027). */
   readonly riskProfileRef?: Ref;
   readonly executionProfileRef?: Ref;
+  /**
+   * Ф1 `shared-execution-engine` (аддитивно) — версионированная модель среды исполнения
+   * (`RealityModel`, reality-model.ts). Отсутствует ⇒ среда читается из встроенных слотов
+   * `ExecutionProfile` (dual-read-окно, `resolveRealityModel`).
+   */
+  readonly realityModelRef?: Ref;
   readonly parameterGrid?: object;
   /** Детерминизм (FR-028). */
   readonly seed: number;

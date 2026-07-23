@@ -6,6 +6,7 @@ export * from './brief.js';
 export * from './decision.js';
 export * from './context.js';
 export * from './indicators.js';
+export * from './reality-model.js';
 export * from './risk-execution.js';
 export * from './run.js';
 export * from './module.js';

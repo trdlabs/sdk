@@ -1,0 +1,9 @@
+{
+  "realityModel": {
+    "id": "unsupported_fill_reality",
+    "version": "1.0.0",
+    "fillModel": { "kind": "twap" },
+    "feeModel": { "kind": "fixed_bps", "bps": 10 },
+    "slippageModel": { "kind": "fixed_bps", "bps": 5 }
+  }
+}

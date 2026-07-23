@@ -1,0 +1,7 @@
+{
+  "realityModel": {
+    "id": "incomplete_reality",
+    "version": "1.0.0",
+    "fillModel": { "kind": "next_bar_open" }
+  }
+}

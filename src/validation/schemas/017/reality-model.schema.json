@@ -1,0 +1,221 @@
+{
+  "$id": "https://trading-platform/017/reality-model.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/RealityModel",
+  "definitions": {
+    "RealityModel": {
+      "type": "object",
+      "properties": {
+        "fillModel": {
+          "$ref": "#/definitions/FillModel"
+        },
+        "feeModel": {
+          "$ref": "#/definitions/FeeModel"
+        },
+        "slippageModel": {
+          "$ref": "#/definitions/SlippageModel"
+        },
+        "fundingModel": {
+          "$ref": "#/definitions/FundingModel",
+          "description": "Отсутствует ⇒ фандинг не начисляется (035: opt-in)."
+        },
+        "latency": {
+          "$ref": "#/definitions/LatencyModel"
+        },
+        "partialFill": {
+          "$ref": "#/definitions/PartialFillModel"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "feeModel",
+        "fillModel",
+        "id",
+        "slippageModel",
+        "version"
+      ],
+      "additionalProperties": false,
+      "description": "`RealityModel` — версионированная модель среды исполнения. Runner-owned: не объявляется внутри модуля, привязывается на уровне прогона по `id+version` (`BacktestRunRequest.realityModelRef`), ровно как `RiskProfile`/`ExecutionProfile` (FR-016)."
+    },
+    "FillModel": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/NextBarOpenFillModel"
+        },
+        {
+          "$ref": "#/definitions/SameBarCloseFillModel"
+        }
+      ],
+      "description": "Замкнутый каталог fill-моделей."
+    },
+    "NextBarOpenFillModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "next_bar_open"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Исполнение по `open` СЛЕДУЮЩЕГО бара (анти-lookahead: бар решения уже закрыт)."
+    },
+    "SameBarCloseFillModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "same_bar_close"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Исполнение по `close` бара решения (того же бара, на котором сработал `onBarClose`)."
+    },
+    "FeeModel": {
+      "$ref": "#/definitions/FixedBpsFeeModel",
+      "description": "Замкнутый каталог fee-моделей."
+    },
+    "FixedBpsFeeModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "fixed_bps"
+        },
+        "bps": {
+          "type": "number",
+          "description": "Базисные пункты (1 bps = 1/10 000). `0` — валидное объявление «без комиссии»."
+        }
+      },
+      "required": [
+        "kind",
+        "bps"
+      ],
+      "additionalProperties": false,
+      "description": "Комиссия фиксированными базисными пунктами нотионала."
+    },
+    "SlippageModel": {
+      "$ref": "#/definitions/FixedBpsSlippageModel",
+      "description": "Замкнутый каталог slippage-моделей."
+    },
+    "FixedBpsSlippageModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "fixed_bps"
+        },
+        "bps": {
+          "type": "number",
+          "description": "Базисные пункты (1 bps = 1/10 000). `0` — валидное объявление «без проскальзывания»."
+        }
+      },
+      "required": [
+        "kind",
+        "bps"
+      ],
+      "additionalProperties": false,
+      "description": "Проскальзывание фиксированными базисными пунктами (направление — неблагоприятно к стороне)."
+    },
+    "FundingModel": {
+      "$ref": "#/definitions/PerMinuteProrateFundingModel",
+      "description": "Замкнутый каталог funding-моделей."
+    },
+    "PerMinuteProrateFundingModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "per_minute_prorate"
+        },
+        "intervalHours": {
+          "type": "number",
+          "description": "Интервал, за который выражена ставка ленты; поминутный делитель = `intervalHours * 60`."
+        }
+      },
+      "required": [
+        "kind",
+        "intervalHours"
+      ],
+      "additionalProperties": false,
+      "description": "Поминутное пропорциональное начисление ставки, выраженной за `intervalHours` (перпы: 8h)."
+    },
+    "LatencyModel": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ZeroLatencyModel"
+        },
+        {
+          "$ref": "#/definitions/FixedMsLatencyModel"
+        }
+      ],
+      "description": "Замкнутый каталог latency-моделей."
+    },
+    "ZeroLatencyModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "zero"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Задержка не моделируется. Это ЕДИНСТВЕННЫЙ kind, который сегодня реализует хоть один интерпретатор (и paper платформы, и backtester исполняют без задержки) — констатация состояния кода, не предписание дефолта."
+    },
+    "FixedMsLatencyModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "fixed_ms"
+        },
+        "submitMs": {
+          "type": "number",
+          "description": "Задержка приёма заявки средой."
+        },
+        "cancelMs": {
+          "type": "number",
+          "description": "Задержка приёма отмены; отсутствует ⇒ равна `submitMs`."
+        }
+      },
+      "required": [
+        "kind",
+        "submitMs"
+      ],
+      "additionalProperties": false,
+      "description": "Фиксированная задержка в миллисекундах. Реализующего интерпретатора пока НЕТ."
+    },
+    "PartialFillModel": {
+      "$ref": "#/definitions/NoPartialFillModel",
+      "description": "Замкнутый каталог partial-fill-моделей."
+    },
+    "NoPartialFillModel": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "none"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Заявка исполняется целиком либо не исполняется. Единственный kind каталога: симуляция частичных филлов сознательно вне скоупа (083 §2.7, §5 «вне скоупа»; LEAN тоже их не моделирует)."
+    }
+  },
+  "title": "RealityModel"
+}

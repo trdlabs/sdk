@@ -63,13 +63,25 @@ local status only, no plan duplication.
   ships as a separate public `@trdlabs/engine` that depends on this package — this **revises
   Q1-083** ("engine-core inside the SDK"; one owner of execution semantics is preserved, only
   the address changes). `@trdlabs/backtester-sdk` remains standalone (doc 07 A+ upheld).
-  SDK part (Phase 1 of the card):
+  SDK part (Phase 1 of the card) — **delivered in 0.12.0** ([#26](https://github.com/trdlabs/sdk/pull/26)):
   - Separate a **versioned `realityModel`** (fill/fee/slippage/latency — environment
     properties) out of the 017 `ExecutionProfile` (which keeps intent: order type, TIF,
     sizing, timeout/cancel). Additive, with a dual-read window per versioning-policy.
+    Landed as `research-contract/reality-model.ts` + `BacktestRunRequest.realityModelRef` +
+    `resolveRealityModel` (the one sanctioned read during the window; fail-closed on a
+    split-vs-embedded conflict rather than silently preferring one).
   - Tighten the `object`-typed model slots in `research-contract/risk-execution.ts`
     (`fillModel`/`feeModel`/`slippageModel`/`latency`) to closed discriminated catalogs
-    (pattern: backtester `engine/profiles.ts`, e.g. `{kind:'fixed_bps', bps}`).
+    (pattern: backtester `engine/profiles.ts`, e.g. `{kind:'fixed_bps', bps}`). Landed for all
+    six slots (`+fundingModel`/`partialFill`), with `unsupported_fill_model_kind` (024) and the
+    new `unsupported_reality_model_kind` owning off-catalog kinds instead of `schema_invalid`.
+
+  Two things the SDK deliberately did **not** decide, and which stay with the Phase-1 semantics
+  SSOT doc: which reality model applies in paper / backtest / live and with what values (the
+  catalogs are vocabulary, not defaults), and when the embedded form stops being accepted — the
+  dual-read window closes only after platform, backtester and lab consume the split form.
+  Consumers were not migrated: no repo imports `ExecutionProfile` from this package today
+  (`backtester` declares its own copy in `packages/research-contracts` — a dedup target).
 
 Full analysis: control-center
 [`docs/analysis/10-shared-execution-kernel.md`](../../control-center/docs/analysis/10-shared-execution-kernel.md).

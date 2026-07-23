@@ -6,13 +6,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Имена 5 core-схем конверта контракта 017. */
+/** Имена core-схем конверта контракта 017. */
 export type CoreSchemaName =
   | 'module-manifest'
   | 'strategy-decision'
   | 'overlay-decision'
   | 'backtest-run-request'
-  | 'validation-result';
+  | 'validation-result'
+  | 'reality-model';
 
 /** Имя core-схемы → имя JSON-файла. */
 export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
@@ -21,6 +22,7 @@ export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
   'overlay-decision': 'overlay-decision.schema.json',
   'backtest-run-request': 'backtest-run-request.schema.json',
   'validation-result': 'validation-result.schema.json',
+  'reality-model': 'reality-model.schema.json',
 };
 
 /** `$id` каждой core-схемы (parity-anchor). */
@@ -30,6 +32,7 @@ export const SCHEMA_IDS: Readonly<Record<CoreSchemaName, string>> = {
   'overlay-decision': 'https://trading-platform/017/overlay-decision.schema.json',
   'backtest-run-request': 'https://trading-platform/017/backtest-run-request.schema.json',
   'validation-result': 'https://trading-platform/017/validation-result.schema.json',
+  'reality-model': 'https://trading-platform/017/reality-model.schema.json',
 };
 
 const SCHEMAS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'schemas', '017');
@@ -44,7 +47,7 @@ export function schemaAsset(name: CoreSchemaName): Record<string, unknown> {
   }
 }
 
-/** Все 5 core-схем в порядке каталога. */
+/** Все core-схемы в порядке каталога. */
 export function allSchemaAssets(): readonly Record<string, unknown>[] {
   return (Object.keys(SCHEMA_FILES) as CoreSchemaName[]).map(schemaAsset);
 }

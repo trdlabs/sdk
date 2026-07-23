@@ -53,6 +53,10 @@
         "executionProfileRef": {
           "$ref": "#/definitions/Ref"
         },
+        "realityModelRef": {
+          "$ref": "#/definitions/Ref",
+          "description": "Ф1 `shared-execution-engine` (аддитивно) — версионированная модель среды исполнения (`RealityModel`, reality-model.ts). Отсутствует ⇒ среда читается из встроенных слотов `ExecutionProfile` (dual-read-окно, `resolveRealityModel`)."
+        },
         "parameterGrid": {
           "type": "object"
         },
