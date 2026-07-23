@@ -195,6 +195,30 @@ test('dual-read: подменённая модель не выдаётся за 
   assert.deepEqual(otherId, { ok: false, reason: 'reality_model_ref_mismatch' });
 });
 
+test('dual-read: непривязанная модель не принимается — подмена закрыта с обеих сторон', () => {
+  // Зеркало reality_model_ref_mismatch: там прогон привязал одну модель и подсунули другую,
+  // здесь прогон не привязывал ничего. Принять — значит позволить модели удостоверять себя саму.
+  // @ts-expect-error — тип запрещает модель без привязки (TS2345). Директива И ЕСТЬ проверка
+  // типового слоя: ослабнет запрет — станет лишней, и tsconfig.test.json уронит сборку TS2578.
+  const unbound = resolveRealityModel({ executionProfile: SPLIT, realityModel: MODEL });
+  assert.deepEqual(unbound, { ok: false, reason: 'unbound_reality_model' });
+
+  // Та же модель с привязкой прогона читается штатно.
+  const bound = resolveRealityModel({
+    executionProfile: SPLIT,
+    realityModelRef: REF,
+    realityModel: MODEL,
+  });
+  assert.equal(bound.ok, true);
+});
+
+test('dual-read: непривязанная модель не подменяет и встроенную форму', () => {
+  const tampered: RealityModel = { ...MODEL, feeModel: { kind: 'fixed_bps', bps: 0 } };
+  // @ts-expect-error — тип запрещает модель без привязки; здесь проверяется рантайм-слой
+  const res = resolveRealityModel({ executionProfile: EMBEDDED, realityModel: tampered });
+  assert.deepEqual(res, { ok: false, reason: 'unbound_reality_model' });
+});
+
 test('привязка модели среды существует ровно в одном месте — на уровне прогона', () => {
   // Второй ref на ExecutionProfile дал бы два источника истины без правила конфликта.
   const profileKeys = Object.keys(SPLIT satisfies ExecutionProfile);

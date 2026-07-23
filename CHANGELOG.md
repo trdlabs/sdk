@@ -123,12 +123,15 @@ shipping E1 now is that `lab` can prepare event-driven authoring against a stabl
 - `research-contract`: **`resolveRealityModel({ executionProfile, realityModelRef?, realityModel? })`**
   — the one sanctioned read during the dual-read window, and the only place the run's binding is
   checked against what the caller actually resolved. Every ambiguity fails closed rather than
-  resolving to something (constitution XIV — no silent fallback): a bound `realityModelRef` with
-  no resolved model → `unresolved_reality_model_ref`; a resolved model whose `id@version` differs
-  from the ref → `reality_model_ref_mismatch` (otherwise a run would execute against an
-  environment it never declared — precisely the substitution that versioning the model is meant to
-  prevent); both forms present and disagreeing → `conflicting_reality_model`; neither present →
-  `missing_reality_model`. The embedded form resolves without a `ref`: an `ExecutionProfile`'s
+  resolving to something (constitution XIV — no silent fallback): a model passed with **no** run
+  binding → `unbound_reality_model`; a bound `realityModelRef` with no resolved model →
+  `unresolved_reality_model_ref`; a resolved model whose `id@version` differs from the ref →
+  `reality_model_ref_mismatch`; both forms present and disagreeing → `conflicting_reality_model`;
+  neither present → `missing_reality_model`. The first and third close substitution from both
+  directions — you can neither swap the bound model for another nor supply one the run never
+  bound — which is the whole point of versioning the model. The input type is a union, so
+  «model without ref» does not type-check either; the runtime outcome covers JS callers and data
+  arriving untyped from a boundary. The embedded form resolves without a `ref`: an `ExecutionProfile`'s
   identity is not the reality model's identity.
 - **The reality model is bound in exactly one place** — `BacktestRunRequest.realityModelRef`,
   mirroring `riskProfileRef`/`executionProfileRef` (FR-016). `ExecutionProfile` deliberately
@@ -167,10 +170,11 @@ shipping E1 now is that `lab` can prepare event-driven authoring against a stabl
 ### Migration (Ф1 — `RealityModel`)
 
 Additive at the wire/validation layer; no consumer has to move. During the dual-read window an
-`ExecutionProfile` may carry the model slots inline as before. To adopt the split form, register the environment as a `RealityModel`
-and point at it with `realityModelRef` (on the run request, or on the execution profile). The
-embedded form stops being accepted only after platform, backtester and lab consume the split form
-— one minor plus one major cycle away, announced separately.
+`ExecutionProfile` may carry the model slots inline as before. To adopt the split form, register
+the environment as a `RealityModel` and point at it with `BacktestRunRequest.realityModelRef` —
+the run request is the **only** place the model binds, so a resolved model always travels with
+the ref that bound it. The embedded form stops being accepted only after platform, backtester and
+lab consume the split form — one minor plus one major cycle away, announced separately.
 
 ## [0.11.0] - 2026-07-20
 
