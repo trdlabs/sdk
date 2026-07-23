@@ -89,6 +89,22 @@ Pinning exactly (as `mock-platform` does) is stronger still.
 then on breaking changes take a major, per the standard rule in
 [AGENTS.md](AGENTS.md).
 
+### "Additive on the wire" is not the same as "safe to upgrade"
+
+Some changes here add to the contract without invalidating any payload that
+validated before, yet still break consumers **that enumerate the contract**
+rather than merely read it. Know which kind of consumer you are:
+
+| Change | Safe for | Breaks |
+| --- | --- | --- |
+| New `ValidationCode` member | Code that reads `issue.code` | An exhaustive `Record<ValidationCode, Severity>` — stops compiling |
+| New bundled schema | Code that loads schemas by name | Code that copies the schema *files* while iterating `SCHEMA_IDS` — misses a file at registry construction |
+| `CONTRACT_VERSION` bump | Manifests on older versions (still supported) | Anything that writes the constant into a content hash, or gates on its exact value |
+
+The last one is a **cross-repo anchor**: `trading-platform` owns the gates that
+police it and `trading-backtester` writes it into run evidence, so bumping it is
+a sequenced change across repos — never a one-line edit in this package.
+
 ## License
 
 Apache-2.0.

@@ -19,6 +19,22 @@ Two contract changes ship together. **0.12.0 was prepared but never published** 
 `0.11.0 → 0.13.0` — so its changes are part of this release, listed under «Ф1 …» below rather
 than in a section of their own.
 
+> **Read this before treating anything below as purely additive.** Two kinds of change in this
+> release are additive *on the wire* — no payload that validated before stops validating — yet
+> **source- or build-breaking for consumers that enumerate the contract**:
+>
+> - **A new `ValidationCode` member.** Anything holding an exhaustive
+>   `Record<ValidationCode, Severity>` over the re-sourced union stops compiling until it adds the
+>   new codes. `backtester` does exactly this and did stop compiling.
+> - **A new bundled schema.** Anything that copies the schema *files* while iterating the kernel's
+>   `SCHEMA_IDS` asks for a file it never copied and dies at registry-construction time.
+>   `backtester`'s `copy-schemas.mjs` held a hardcoded list of five and produced 34 failures.
+>
+> Neither is visible from the wire format, which is why "additive" alone is the wrong summary. A
+> consumer that only *reads* codes and schemas is unaffected; a consumer that *enumerates* them
+> needs a coordinated change. Additionally, `CONTRACT_VERSION` is not a free-floating string —
+> see the note under Changed (083 E1).
+
 ### Ф1 — versioned `RealityModel` (initiative `shared-execution-engine`)
 
 Contract shape only. It deliberately decides **nothing** about which reality model applies in
@@ -75,7 +91,8 @@ may not declare the surface `017.3` introduced.
   returns, so `ActorCommandBatch` is the schema a host validates; the single-command schema is its
   `$ref` target and stays available for spot checks. Reachable through `schemaAsset` /
   `SCHEMA_IDS` / `validateCore`. They are wire forms, not submit-time artifacts, so `validate()`
-  gains no arm for them.
+  gains no arm for them. **Build-breaking for schema-copying consumers** — see the note at the top
+  of this release.
 - `research-contract`: the `place` and `timer.set` commands are **split into closed variants** so
   an ambiguous command cannot type-check or pass AJV. `place` branches on order type — `market`
   carries no price, `limit` requires `price`, `stop_market` requires `stopPrice` — and `timer.set`
@@ -93,6 +110,15 @@ may not declare the surface `017.3` introduced.
   `contractVersion` would no longer tell you which manifest envelope the author wrote against.
   The code's documented meaning widens accordingly — «version outside the supported set **or** not
   covering the declared surface».
+
+  **`CONTRACT_VERSION` is a cross-repo anchor, not a label.** Two consequences were understated
+  when this shipped, both found while rolling 0.13.0 out. Downstream, `backtester` writes the
+  constant into `RunEvidence`, which feeds the run content hash — so the bump changes **every**
+  `result_hash` and invalidates its committed byte-identity goldens. Upstream, the platform owns
+  the gates that police the constant (as `src/contract/constants.ts` already claimed): a bump has
+  to be ratified there, and every new `ValidationCode` needs a taxonomy check. Bumping it is a
+  sequenced cross-repo change — platform first, then this package, then consumers — not a
+  one-line edit here.
 - `validation`: `NormalizedManifest` echoes `lifecycle` **only when it was declared explicitly**,
   appended last. Substituting the default would shift the projection — and the content hash — of
   every module that predates 083; read an absent field through `DEFAULT_STRATEGY_LIFECYCLE`.
@@ -143,7 +169,8 @@ shipping E1 now is that `lab` can prepare event-driven authoring against a stabl
   `unknown_metric` / `unsupported_market_data_kind`: `fillModel` keeps the more specific 024 code
   `unsupported_fill_model_kind`, and the remaining slots report the new
   `unsupported_reality_model_kind`. A *recognised* kind carrying a malformed payload stays
-  `schema_invalid`.
+  `schema_invalid`. **Adding a code is source-breaking for consumers holding an exhaustive
+  severity map** — see the note at the top of this release.
 - `research-contract`: `ExecutionProfile` gains optional intent slots `orderType`
   (`market` | `limit` | `stop_market`) and `timeInForce` (`gtc` | `ioc`), the vocabulary spec 083
   already uses. Sizing is deliberately still absent — size ceilings are `RiskProfile`'s hard
