@@ -63,13 +63,14 @@ local status only, no plan duplication.
   ships as a separate public `@trdlabs/engine` that depends on this package — this **revises
   Q1-083** ("engine-core inside the SDK"; one owner of execution semantics is preserved, only
   the address changes). `@trdlabs/backtester-sdk` remains standalone (doc 07 A+ upheld).
-  SDK part (Phase 1 of the card) — **delivered in 0.12.0** ([#26](https://github.com/trdlabs/sdk/pull/26)):
+  SDK part (Phase 1 of the card) — **delivered in 0.13.0** ([#26](https://github.com/trdlabs/sdk/pull/26), hardened in [#28](https://github.com/trdlabs/sdk/pull/28)):
   - Separate a **versioned `realityModel`** (fill/fee/slippage/latency — environment
     properties) out of the 017 `ExecutionProfile` (which keeps intent: order type, TIF,
     sizing, timeout/cancel). Additive, with a dual-read window per versioning-policy.
-    Landed as `research-contract/reality-model.ts` + `BacktestRunRequest.realityModelRef` +
-    `resolveRealityModel` (the one sanctioned read during the window; fail-closed on a
-    split-vs-embedded conflict rather than silently preferring one).
+    Landed as `research-contract/reality-model.ts` + `BacktestRunRequest.realityModelRef` (the
+    **single** binding point, mirroring `riskProfileRef`/`executionProfileRef` per FR-016) +
+    `resolveRealityModel` — the one sanctioned read during the window, fail-closed on an
+    unresolved ref, an `id@version` mismatch against the ref, or a split-vs-embedded conflict.
   - Tighten the `object`-typed model slots in `research-contract/risk-execution.ts`
     (`fillModel`/`feeModel`/`slippageModel`/`latency`) to closed discriminated catalogs
     (pattern: backtester `engine/profiles.ts`, e.g. `{kind:'fixed_bps', bps}`). Landed for all
@@ -84,11 +85,14 @@ local status only, no plan duplication.
   (`backtester` declares its own copy in `packages/research-contracts` — a dedup target).
 - Phase 6 of the same card, **early-start exception recorded 2026-07-23**: E1 of platform epic 083
   (`specs/083-event-driven-runtime-spike`) — **delivered in 0.13.0**
-  ([#27](https://github.com/trdlabs/sdk/pull/27)). The additive `event_driven` kernel contract:
+  ([#27](https://github.com/trdlabs/sdk/pull/27), hardened in [#28](https://github.com/trdlabs/sdk/pull/28)). The additive `event_driven` kernel contract:
   `lifecycle` on `ModuleManifest` (default `single_position`), the
   `StrategyActor`/`ActorInputEvent`/`ActorCommand`/`ActorContext` vocabulary, the form validator
-  (`lifecycle_form_invalid`), the `defineActor` sugar, and JSON schemas for both sides of the
-  isolate envelope. `CONTRACT_VERSION` `017.2` → `017.3`, prior versions still supported.
+  (`lifecycle_form_invalid`), the `defineActor` sugar, and JSON schemas for the isolate envelope
+  (the validated unit is the command **batch**, with `place`/`timer.set` split into closed
+  variants so an ambiguous command fails at the schema). `CONTRACT_VERSION` `017.2` → `017.3`;
+  prior versions still validate, but may not declare the surface `017.3` introduced —
+  otherwise the bump would not have guarded anything.
 
   E2–E7 stay behind the epic's return trigger and behind Ф3 — nothing in this SDK release executes
   an actor. What E1 buys now is that `lab` can build event-driven authoring against a vocabulary

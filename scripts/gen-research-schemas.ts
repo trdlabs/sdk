@@ -50,8 +50,11 @@ const TARGETS: ReadonlyArray<Target> = [
   target('ValidationResult', 'validation.ts', 'validation-result.schema.json', 'ValidationResult'),
   target('RealityModel', 'reality-model.ts', 'reality-model.schema.json', 'RealityModel'),
   // 083 E1: обе стороны конверта «событие → команды», пересекающего JSON-границу изолята.
+  // Через границу ходит БАТЧ (то, что вернул один `onEvent`); схема единичной команды оставлена
+  // для точечной проверки и как цель `$ref` из батча.
   target('ActorInputEvent', 'event-driven.ts', 'actor-input-event.schema.json', 'ActorInputEvent'),
   target('ActorCommand', 'event-driven.ts', 'actor-command.schema.json', 'ActorCommand'),
+  target('ActorCommandBatch', 'event-driven.ts', 'actor-command-batch.schema.json', 'ActorCommandBatch'),
 ];
 
 /**

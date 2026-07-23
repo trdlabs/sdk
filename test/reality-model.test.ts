@@ -9,13 +9,14 @@ import assert from 'node:assert/strict';
 
 import {
   FILL_MODEL_KINDS,
+  LATENCY_MODEL_KINDS,
   REALITY_MODEL_KIND_CATALOG,
   REALITY_MODEL_SLOTS,
   resolveRealityModel,
   type ExecutionProfile,
   type RealityModel,
 } from '../src/research-contract/index.js';
-import { validate } from '../src/validation/index.js';
+import { schemaAsset, validate } from '../src/validation/index.js';
 import { platformContractContext } from '../src/research-contract/catalogs.js';
 
 const CTX = platformContractContext();
@@ -106,14 +107,14 @@ const EMBEDDED: ExecutionProfile = {
   slippageModel: MODEL.slippageModel,
 };
 
-const SPLIT: ExecutionProfile = {
-  id: 'default_exec',
-  version: '2.0.0',
-  realityModelRef: { id: MODEL.id, version: MODEL.version },
-};
+/** Профиль намерения без встроенной среды: она приходит привязкой прогона. */
+const SPLIT: ExecutionProfile = { id: 'default_exec', version: '2.0.0' };
+
+/** Привязка прогона (`BacktestRunRequest.realityModelRef`) — единственная точка привязки. */
+const REF = { id: MODEL.id, version: MODEL.version };
 
 test('dual-read: только встроенная форма читается без идентичности модели среды', () => {
-  const res = resolveRealityModel(EMBEDDED);
+  const res = resolveRealityModel({ executionProfile: EMBEDDED });
   assert.equal(res.ok, true);
   assert.equal(res.ok && res.source, 'execution_profile_embedded');
   assert.equal(res.ok && res.ref, undefined);
@@ -121,45 +122,92 @@ test('dual-read: только встроенная форма читается �
 });
 
 test('dual-read: только разделённая форма несёт ref модели среды', () => {
-  const res = resolveRealityModel(SPLIT, MODEL);
+  const res = resolveRealityModel({ executionProfile: SPLIT, realityModelRef: REF, realityModel: MODEL });
   assert.equal(res.ok, true);
   assert.equal(res.ok && res.source, 'reality_model');
   assert.deepEqual(res.ok && res.ref, { id: 'default_reality', version: '1.0.0' });
 });
 
 test('dual-read: совпадающие формы принимаются как разделённая (миграция консистентна)', () => {
-  const res = resolveRealityModel(EMBEDDED, MODEL);
+  const res = resolveRealityModel({ executionProfile: EMBEDDED, realityModelRef: REF, realityModel: MODEL });
   assert.equal(res.ok, true);
   assert.equal(res.ok && res.source, 'reality_model');
 });
 
 test('dual-read: расходящиеся формы — отказ, а не молчаливый выбор одной из них', () => {
-  const res = resolveRealityModel(
-    { ...EMBEDDED, feeModel: { kind: 'fixed_bps', bps: 0 } },
-    MODEL,
-  );
+  const res = resolveRealityModel({
+    executionProfile: { ...EMBEDDED, feeModel: { kind: 'fixed_bps', bps: 0 } },
+    realityModelRef: REF,
+    realityModel: MODEL,
+  });
   assert.deepEqual(res, { ok: false, reason: 'conflicting_reality_model' });
 });
 
 test('dual-read: отсутствие обеих форм — отказ, а не пустая модель среды', () => {
-  const res = resolveRealityModel({ id: 'intent_only', version: '1.0.0' });
+  const res = resolveRealityModel({ executionProfile: { id: 'intent_only', version: '1.0.0' } });
   assert.deepEqual(res, { ok: false, reason: 'missing_reality_model' });
 });
 
 test('dual-read: неполная встроенная форма не выдаётся за полную', () => {
-  const res = resolveRealityModel({ ...EMBEDDED, slippageModel: undefined });
+  const res = resolveRealityModel({
+    executionProfile: { ...EMBEDDED, slippageModel: undefined },
+  });
   assert.deepEqual(res, { ok: false, reason: 'missing_reality_model' });
 });
 
 test('dual-read: опциональные слоты не влияют на сравнение, если совпадают', () => {
   const withOptional = { ...MODEL, latency: { kind: 'zero' } } as const satisfies RealityModel;
-  const res = resolveRealityModel({ ...EMBEDDED, latency: { kind: 'zero' } }, withOptional);
+  const res = resolveRealityModel({
+    executionProfile: { ...EMBEDDED, latency: { kind: 'zero' } },
+    realityModelRef: REF,
+    realityModel: withOptional,
+  });
   assert.equal(res.ok, true);
 });
 
 test('dual-read: расхождение по опциональному слоту тоже конфликт', () => {
-  const res = resolveRealityModel({ ...EMBEDDED, latency: { kind: 'zero' } }, MODEL);
+  const res = resolveRealityModel({
+    executionProfile: { ...EMBEDDED, latency: { kind: 'zero' } },
+    realityModelRef: REF,
+    realityModel: MODEL,
+  });
   assert.deepEqual(res, { ok: false, reason: 'conflicting_reality_model' });
+});
+
+test('dual-read: привязка прогона без разрезолвленной модели — отказ, а не чтение встроенной', () => {
+  const res = resolveRealityModel({ executionProfile: EMBEDDED, realityModelRef: REF });
+  assert.deepEqual(res, { ok: false, reason: 'unresolved_reality_model_ref' });
+});
+
+test('dual-read: подменённая модель не выдаётся за привязанную прогоном', () => {
+  const otherVersion = resolveRealityModel({
+    executionProfile: SPLIT,
+    realityModelRef: REF,
+    realityModel: { ...MODEL, version: '2.0.0' },
+  });
+  assert.deepEqual(otherVersion, { ok: false, reason: 'reality_model_ref_mismatch' });
+
+  const otherId = resolveRealityModel({
+    executionProfile: SPLIT,
+    realityModelRef: REF,
+    realityModel: { ...MODEL, id: 'someone_elses_reality' },
+  });
+  assert.deepEqual(otherId, { ok: false, reason: 'reality_model_ref_mismatch' });
+});
+
+test('привязка модели среды существует ровно в одном месте — на уровне прогона', () => {
+  // Второй ref на ExecutionProfile дал бы два источника истины без правила конфликта.
+  const profileKeys = Object.keys(SPLIT satisfies ExecutionProfile);
+  assert.ok(!profileKeys.includes('realityModelRef'));
+  const schema = JSON.stringify(schemaAsset('backtest-run-request'));
+  assert.ok(schema.includes('realityModelRef'));
+});
+
+test('каталог latency несёт только реализованный kind', () => {
+  assert.deepEqual([...LATENCY_MODEL_KINDS], ['zero']);
+  assert.deepEqual(codesOf({ ...MODEL, latency: { kind: 'fixed_ms', submitMs: 20 } }), [
+    'unsupported_reality_model_kind',
+  ]);
 });
 
 test('run-request принимает realityModelRef и echo-ит его в normalized', () => {

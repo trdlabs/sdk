@@ -1,8 +1,15 @@
 {
-  "$id": "https://trading-platform/017/actor-command.schema.json",
+  "$id": "https://trading-platform/017/actor-command-batch.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$ref": "#/definitions/ActorCommand",
+  "$ref": "#/definitions/ActorCommandBatch",
   "definitions": {
+    "ActorCommandBatch": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ActorCommand"
+      },
+      "description": "Батч команд — то, что актор возвращает из одного `onEvent` и что пересекает JSON-границу изолята. Хост валидирует именно ЕГО (схема `actor-command-batch`): единичная команда — деталь внутри батча, отдельно через границу не ходит."
+    },
     "ActorCommand": {
       "anyOf": [
         {
@@ -321,5 +328,5 @@
       "description": "Только метаданные в трассу — без действия (аналог `AnnotateDecision` в 017)."
     }
   },
-  "title": "ActorCommand"
+  "title": "ActorCommandBatch"
 }

@@ -12,6 +12,8 @@ export type ValidationCode =
   | 'schema_invalid'
   | 'params_schema_invalid'
   | 'decision_schema_invalid'
+  // Объявленная версия контракта вне поддерживаемого набора ЛИБО не покрывает объявленный surface
+  // (083 E1: `lifecycle`/`onEvent` введены в `017.3`).
   | 'unsupported_contract_version'
   | 'unknown_strategy_ref'
   | 'multi_hook_overlay'

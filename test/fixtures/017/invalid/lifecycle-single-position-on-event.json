@@ -7,7 +7,7 @@
     "summary": "Фазовая стратегия, объявляющая точку входа актора",
     "rationale": "Негативная фикстура: onEvent недопустим в дефолтной форме single_position.",
     "author": "agent",
-    "contractVersion": "017.2",
+    "contractVersion": "017.3",
     "status": "research_only",
     "paramsSchema": { "type": "object", "additionalProperties": false, "properties": {} },
     "capabilities": { "platformSdk": true },

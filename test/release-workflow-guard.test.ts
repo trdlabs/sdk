@@ -36,3 +36,43 @@ test('release workflow carries no legacy trading-platform-sdk name', () => {
 test('release workflow ships no GitHub tarball (.tgz) delivery channel', () => {
   assert.doesNotMatch(workflow, /\.tgz/);
 });
+
+// AGENTS.md «Перед релизом»: build, conformance:validation, sdk:pack, sdk:verify. A gate the
+// workflow does not run is not a gate — conformance:validation was missing until this test.
+//
+// Matching is anchored to `run:` so a mention in the file's header comment cannot pass for an
+// executed step (the header does say "after a successful npm publish").
+const GATES = [
+  'npm test',
+  'npm run build',
+  'npm run conformance:validation',
+  'npm run sdk:pack',
+  'npm run sdk:verify',
+] as const;
+
+/** Position of the workflow step that actually executes `command`, or -1. */
+function stepAt(command: string): number {
+  return workflow.indexOf(`run: ${command}`);
+}
+
+test('release workflow runs every mandatory pre-release gate', () => {
+  for (const gate of GATES) {
+    assert.ok(stepAt(gate) >= 0, `release workflow does not run: ${gate}`);
+  }
+});
+
+test('conformance gate runs after the build it validates', () => {
+  // The harness imports dist/ — running it before `npm run build` would validate stale output.
+  assert.ok(
+    stepAt('npm run conformance:validation') > stepAt('npm run build'),
+    'conformance:validation must come after npm run build',
+  );
+});
+
+test('every gate runs before publish', () => {
+  const publishAt = stepAt('npm publish --access public --provenance');
+  assert.ok(publishAt >= 0, 'no publish step found');
+  for (const gate of GATES) {
+    assert.ok(stepAt(gate) < publishAt, `${gate} must run before npm publish`);
+  }
+});

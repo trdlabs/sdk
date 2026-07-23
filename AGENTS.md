@@ -79,6 +79,14 @@ npm run sdk:verify               # verify packed tarball (run after sdk:pack)
   не канал доставки. GitHub tag/release — вторичная release-note без tarball.
 - Реестр npm иммутабелен: ошибка правится новым patch-релизом, не переизданием.
 - Breaking changes — major semver + migration notes + consumer PRs.
+  **Исключение на время `0.x`** (записано явно, а не подразумевается): semver не даёт
+  гарантий совместимости ниже 1.0.0, а поверхность контракта ещё движется (017-разделение
+  execution-семантики с открытым dual-read-окном). Поэтому до `1.0.0` breaking-изменение
+  контракта/типов может выйти **minor**-бампом — обязательно с записью в `### Changed`
+  CHANGELOG и migration note. Потребителей это не всплывает автоматически: caret npm пинит
+  minor для `0.x` (`^0.13.0` → `>=0.13.0 <0.14.0`), так что переход всегда — осознанная правка
+  на стороне потребителя. `1.0.0` резервируется под момент, когда поверхность стабилизируется;
+  после него правило «breaking → major» действует без исключений. См. README §Versioning.
 
 ## Downstream consumers
 - `trading-lab` — agent workflows через MCP + SDK types

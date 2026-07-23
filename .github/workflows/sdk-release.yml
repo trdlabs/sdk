@@ -77,6 +77,11 @@ jobs:
       - name: Build SDK
         run: npm run build
 
+      # Обязательный release gate (AGENTS.md «Перед релизом»): 017-фикстуры через published
+      # surface @trdlabs/sdk/validation. Гоняется ПОСЛЕ build — harness импортирует dist/.
+      - name: Validation conformance (017 fixtures via published surface)
+        run: npm run conformance:validation
+
       - name: Pack SDK (verification)
         run: npm run sdk:pack
 

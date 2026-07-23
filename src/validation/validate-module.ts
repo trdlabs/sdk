@@ -9,6 +9,7 @@ import type { ContractContext } from '../research-contract/catalogs.js';
 import {
   DEFAULT_STRATEGY_LIFECYCLE,
   EVENT_DRIVEN_HOOKS,
+  EVENT_DRIVEN_MIN_CONTRACT_VERSION,
   STRATEGY_LIFECYCLES,
   type StrategyLifecycle,
 } from '../research-contract/event-driven.js';
@@ -151,6 +152,40 @@ function validateSampleDecisions(
 }
 
 /**
+ * 083 E1 — новый surface конверта ограждён объявленной версией контракта.
+ *
+ * `SUPPORTED_CONTRACT_VERSIONS` — возрастающий список, поэтому «не старше» проверяется позицией в
+ * нём, без semver-парсера. Версия вне набора уже отклонена шагом 2 — здесь не дублируем.
+ */
+function validateSurfaceContractVersion(
+  manifest: ModuleManifest,
+  hooks: readonly LifecycleHook[],
+  ctx: ContractContext,
+  issues: ValidationIssue[],
+): void {
+  const usesEventDrivenSurface = manifest.lifecycle !== undefined || hooks.includes('onEvent');
+  if (!usesEventDrivenSurface) return;
+
+  const declared: unknown = manifest.contractVersion;
+  if (typeof declared !== 'string') return;
+  const supported = ctx.supportedContractVersions;
+  const declaredIdx = supported.indexOf(declared);
+  if (declaredIdx < 0) return; // версия вне набора — причина уже выставлена
+
+  const introducedIdx = supported.indexOf(EVENT_DRIVEN_MIN_CONTRACT_VERSION);
+  if (introducedIdx >= 0 && declaredIdx >= introducedIdx) return;
+
+  issues.push(
+    makeIssue(
+      'unsupported_contract_version',
+      `конверт 083 E1 (lifecycle/onEvent) введён в contractVersion ` +
+        `"${EVENT_DRIVEN_MIN_CONTRACT_VERSION}"; манифест объявляет "${declared}"`,
+      '/contractVersion',
+    ),
+  );
+}
+
+/**
  * 083 E1 — соответствие набора хуков объявленной ФОРМЕ стратегии (kind:'strategy').
  *
  * Две формы разведены нацело, а не сложены: `single_position` — фазовая модель с хуками
@@ -252,6 +287,8 @@ export function validateModule(
   const lifecycle: StrategyLifecycle = lifecycleKnown
     ? ((declaredLifecycle as StrategyLifecycle | undefined) ?? DEFAULT_STRATEGY_LIFECYCLE)
     : DEFAULT_STRATEGY_LIFECYCLE;
+
+  validateSurfaceContractVersion(manifest, hooks, ctx, issues);
 
   if (manifest.kind === 'strategy' && lifecycleKnown) {
     validateLifecycleForm(lifecycle, hooks, issues);
