@@ -71,6 +71,24 @@ Current: **0.13.0**. See [CHANGELOG.md](CHANGELOG.md) for release history.
 SDK package versions follow semver. Contract compatibility is surfaced through
 the exported version constants for each contract area.
 
+### Pre-1.0: a minor bump may be source-breaking
+
+While the package is on `0.x`, **a minor bump may carry a breaking contract or
+type change** — semver reserves no compatibility guarantee below 1.0.0, and the
+contract surface here is still moving (the 017 execution-semantics split is
+mid-flight, with a dual-read window open). Every such change is called out
+under `### Changed` in the changelog with a migration note; the project does not
+silently break consumers, it just does not spend a major on it yet.
+
+What protects you in practice: npm's caret pins the *minor* for `0.x`, so
+`^0.13.0` resolves to `>=0.13.0 <0.14.0`. A consumer never floats onto a
+breaking minor — the bump is always a deliberate edit on the consumer side.
+Pinning exactly (as `mock-platform` does) is stronger still.
+
+`1.0.0` is reserved for the point where the contract surface stops moving; from
+then on breaking changes take a major, per the standard rule in
+[AGENTS.md](AGENTS.md).
+
 ## License
 
 Apache-2.0.

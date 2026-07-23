@@ -94,26 +94,22 @@ export type FundingModelKind = (typeof FUNDING_MODEL_KINDS)[number];
 /**
  * Задержка не моделируется. Это ЕДИНСТВЕННЫЙ kind, который сегодня реализует хоть один
  * интерпретатор (и paper платформы, и backtester исполняют без задержки) — констатация
- * состояния кода, не предписание дефолта.
+ * состояния кода, не предписание дефолта. ЯВНОЕ объявление `zero` тем и отличается от
+ * отсутствия слота, что среда объявлена, а не умолчана.
+ *
+ * Каталога с одним членом достаточно: `fixed_ms` (и любая иная модель задержки) появится здесь
+ * ровно тогда, когда её кто-то реализует, — правило каталога одно для всех слотов и исключений
+ * для «пригодится потом» не имеет.
  */
 export interface ZeroLatencyModel {
   readonly kind: 'zero';
 }
 
-/** Фиксированная задержка в миллисекундах. Реализующего интерпретатора пока НЕТ. */
-export interface FixedMsLatencyModel {
-  readonly kind: 'fixed_ms';
-  /** Задержка приёма заявки средой. */
-  readonly submitMs: number;
-  /** Задержка приёма отмены; отсутствует ⇒ равна `submitMs`. */
-  readonly cancelMs?: number;
-}
-
 /** Замкнутый каталог latency-моделей. */
-export type LatencyModel = ZeroLatencyModel | FixedMsLatencyModel;
+export type LatencyModel = ZeroLatencyModel;
 
 /** Замкнутый каталог `latency.kind`. */
-export const LATENCY_MODEL_KINDS = ['zero', 'fixed_ms'] as const;
+export const LATENCY_MODEL_KINDS = ['zero'] as const;
 export type LatencyModelKind = (typeof LATENCY_MODEL_KINDS)[number];
 
 // ─────────────────────────────────────────────────────────────────────────────

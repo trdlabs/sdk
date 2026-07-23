@@ -49,6 +49,16 @@ export const STRATEGY_LIFECYCLES = ['single_position', 'event_driven'] as const;
 /** Форма, подразумеваемая манифестом без явного `lifecycle`. */
 export const DEFAULT_STRATEGY_LIFECYCLE: StrategyLifecycle = 'single_position';
 
+/**
+ * Версия контракта, ВВОДЯЩАЯ surface 083 E1 (поле `lifecycle` и хук `onEvent`).
+ *
+ * Манифест, объявляющий этот surface под более ранней версией, отклоняется
+ * (`unsupported_contract_version`): иначе bump `017.2 → 017.3` был бы чисто декларативным —
+ * `contractVersion` перестал бы говорить, какой конверт манифеста автор объявил, и версия
+ * потеряла бы способность что-либо ограждать.
+ */
+export const EVENT_DRIVEN_MIN_CONTRACT_VERSION = '017.3';
+
 /** Хуки, допустимые для `event_driven` (единая точка входа + опциональный жизненный цикл). */
 export const EVENT_DRIVEN_HOOKS = ['init', 'onEvent', 'dispose'] as const;
 
@@ -227,22 +237,19 @@ export type ActorInputEventKind = (typeof ACTOR_INPUT_EVENT_KINDS)[number];
 // ActorCommand — что актор просит у хоста.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Подать заявку. `clientOrderId` — свой, детерминированный (от seed/счётчика); повтор
- * уже живого ID — ошибка хоста, а не молчаливая замена. `qtyUsd` — ПРОСЬБА: RiskEngine клампит
- * или отказывает (`order.denied`).
- */
-export interface ActorPlaceCommand {
+// Заявка разложена на ветку НА ТИП ОРДЕРА, а не на один тип с опциональными ценами: `limit` без
+// `price` и `stop_market` без `stopPrice` неисполнимы, а `market` с ценой неоднозначен. Команды
+// приходят из НЕДОВЕРЕННОГО кода через JSON-границу — двусмысленная команда должна отваливаться на
+// схеме у хоста, а не доезжать до движка, где её пришлось бы трактовать.
+
+/** Рыночная заявка: исполняется по состоянию среды, цены не несёт. */
+export interface ActorPlaceMarketCommand {
   readonly kind: 'place';
+  readonly type: 'market';
   readonly clientOrderId: string;
   readonly side: OrderSide;
-  readonly type: OrderType;
   /** Запрашиваемый нотионал в USD (до клампа риском). */
   readonly qtyUsd: number;
-  /** Лимитная цена (для `limit`). */
-  readonly price?: number;
-  /** Триггерная цена (для `stop_market`). */
-  readonly stopPrice?: number;
   readonly tif?: TimeInForce;
   /** Заявка только уменьшает экспозицию; проходит и в состоянии REDUCING. */
   readonly reduceOnly?: boolean;
@@ -250,19 +257,74 @@ export interface ActorPlaceCommand {
   readonly rationale?: string;
 }
 
+/** Лимитная заявка: `price` обязателен, триггера нет. */
+export interface ActorPlaceLimitCommand {
+  readonly kind: 'place';
+  readonly type: 'limit';
+  readonly clientOrderId: string;
+  readonly side: OrderSide;
+  readonly qtyUsd: number;
+  /** Лимитная цена. */
+  readonly price: number;
+  readonly tif?: TimeInForce;
+  readonly reduceOnly?: boolean;
+  readonly tags?: readonly string[];
+  readonly rationale?: string;
+}
+
+/** Стоп-маркет заявка: `stopPrice` обязателен, лимитной цены нет. */
+export interface ActorPlaceStopMarketCommand {
+  readonly kind: 'place';
+  readonly type: 'stop_market';
+  readonly clientOrderId: string;
+  readonly side: OrderSide;
+  readonly qtyUsd: number;
+  /** Триггерная цена. */
+  readonly stopPrice: number;
+  readonly tif?: TimeInForce;
+  readonly reduceOnly?: boolean;
+  readonly tags?: readonly string[];
+  readonly rationale?: string;
+}
+
+/**
+ * Подать заявку. `clientOrderId` — свой, детерминированный (от seed/счётчика); повтор
+ * уже живого ID — ошибка хоста, а не молчаливая замена. `qtyUsd` — ПРОСЬБА: RiskEngine клампит
+ * или отказывает (`order.denied`).
+ */
+export type ActorPlaceCommand =
+  | ActorPlaceMarketCommand
+  | ActorPlaceLimitCommand
+  | ActorPlaceStopMarketCommand;
+
 /** Отменить свою заявку по её `clientOrderId`. `modify` в v1 нет — place-after-cancel (Q3). */
 export interface ActorCancelCommand {
   readonly kind: 'cancel';
   readonly clientOrderId: string;
 }
 
-/** Поставить таймер: либо на абсолютный business_ts (`atTs`), либо через `afterMs` от `ts` события. */
-export interface ActorTimerSetCommand {
+/** Таймер на абсолютный business_ts. */
+export interface ActorTimerSetAtCommand {
   readonly kind: 'timer.set';
   readonly timerId: string;
-  readonly atTs?: number;
-  readonly afterMs?: number;
+  /** Абсолютный business_ts срабатывания (часы данных, не wall-clock). */
+  readonly atTs: number;
 }
+
+/** Таймер через `afterMs` от `ts` обрабатываемого события. */
+export interface ActorTimerSetAfterCommand {
+  readonly kind: 'timer.set';
+  readonly timerId: string;
+  /** Смещение от `ts` события, породившего команду. */
+  readonly afterMs: number;
+}
+
+/**
+ * Поставить таймер: ЛИБО абсолютный `atTs`, ЛИБО относительный `afterMs` — строго одно из двух.
+ * Ни то ни другое (когда будить?) и оба сразу (какое из них истина?) — неоднозначные команды,
+ * и обе формы закрыты на уровне схемы, а не соглашением.
+ */
+export type ActorTimerSetCommand = ActorTimerSetAtCommand | ActorTimerSetAfterCommand;
 
 /** Снять ранее поставленный таймер. */
 export interface ActorTimerCancelCommand {
@@ -295,6 +357,13 @@ export const ACTOR_COMMAND_KINDS = [
 ] as const;
 
 export type ActorCommandKind = (typeof ACTOR_COMMAND_KINDS)[number];
+
+/**
+ * Батч команд — то, что актор возвращает из одного `onEvent` и что пересекает JSON-границу
+ * изолята. Хост валидирует именно ЕГО (схема `actor-command-batch`): единичная команда — деталь
+ * внутри батча, отдельно через границу не ходит.
+ */
+export type ActorCommandBatch = readonly ActorCommand[];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Актор.

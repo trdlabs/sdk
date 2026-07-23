@@ -15,7 +15,8 @@ export type CoreSchemaName =
   | 'validation-result'
   | 'reality-model'
   | 'actor-input-event'
-  | 'actor-command';
+  | 'actor-command'
+  | 'actor-command-batch';
 
 /** Имя core-схемы → имя JSON-файла. */
 export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
@@ -27,6 +28,7 @@ export const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
   'reality-model': 'reality-model.schema.json',
   'actor-input-event': 'actor-input-event.schema.json',
   'actor-command': 'actor-command.schema.json',
+  'actor-command-batch': 'actor-command-batch.schema.json',
 };
 
 /** `$id` каждой core-схемы (parity-anchor). */
@@ -39,6 +41,7 @@ export const SCHEMA_IDS: Readonly<Record<CoreSchemaName, string>> = {
   'reality-model': 'https://trading-platform/017/reality-model.schema.json',
   'actor-input-event': 'https://trading-platform/017/actor-input-event.schema.json',
   'actor-command': 'https://trading-platform/017/actor-command.schema.json',
+  'actor-command-batch': 'https://trading-platform/017/actor-command-batch.schema.json',
 };
 
 const SCHEMAS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'schemas', '017');

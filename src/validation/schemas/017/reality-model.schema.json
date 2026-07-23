@@ -151,14 +151,7 @@
       "description": "Поминутное пропорциональное начисление ставки, выраженной за `intervalHours` (перпы: 8h)."
     },
     "LatencyModel": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ZeroLatencyModel"
-        },
-        {
-          "$ref": "#/definitions/FixedMsLatencyModel"
-        }
-      ],
+      "$ref": "#/definitions/ZeroLatencyModel",
       "description": "Замкнутый каталог latency-моделей."
     },
     "ZeroLatencyModel": {
@@ -173,30 +166,7 @@
         "kind"
       ],
       "additionalProperties": false,
-      "description": "Задержка не моделируется. Это ЕДИНСТВЕННЫЙ kind, который сегодня реализует хоть один интерпретатор (и paper платформы, и backtester исполняют без задержки) — констатация состояния кода, не предписание дефолта."
-    },
-    "FixedMsLatencyModel": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "fixed_ms"
-        },
-        "submitMs": {
-          "type": "number",
-          "description": "Задержка приёма заявки средой."
-        },
-        "cancelMs": {
-          "type": "number",
-          "description": "Задержка приёма отмены; отсутствует ⇒ равна `submitMs`."
-        }
-      },
-      "required": [
-        "kind",
-        "submitMs"
-      ],
-      "additionalProperties": false,
-      "description": "Фиксированная задержка в миллисекундах. Реализующего интерпретатора пока НЕТ."
+      "description": "Задержка не моделируется. Это ЕДИНСТВЕННЫЙ kind, который сегодня реализует хоть один интерпретатор (и paper платформы, и backtester исполняют без задержки) — констатация состояния кода, не предписание дефолта. ЯВНОЕ объявление `zero` тем и отличается от отсутствия слота, что среда объявлена, а не умолчана.\n\nКаталога с одним членом достаточно: `fixed_ms` (и любая иная модель задержки) появится здесь ровно тогда, когда её кто-то реализует, — правило каталога одно для всех слотов и исключений для «пригодится потом» не имеет."
     },
     "PartialFillModel": {
       "$ref": "#/definitions/NoPartialFillModel",

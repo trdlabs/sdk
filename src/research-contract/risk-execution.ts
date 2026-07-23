@@ -73,10 +73,11 @@ export interface ExecutionProfile {
    */
   readonly bracketPolicy?: object;
 
-  /** Ф1 — привязка версионированной модели среды. Разделённая форма dual-read-окна. */
-  readonly realityModelRef?: Ref;
-
   // --- Модель среды (dual-read-окно; переезжает в RealityModel) ---
+  //
+  // Привязки модели среды здесь НЕТ намеренно: единственная точка привязки — уровень прогона
+  // (`BacktestRunRequest.realityModelRef`), как у `riskProfileRef`/`executionProfileRef` (FR-016).
+  // Второй ref на профиле дал бы два источника истины без правила разрешения конфликта.
 
   /** @deprecated Ф1 — перенесено в `RealityModel.fillModel`; принимается до конца dual-read-окна. */
   readonly fillModel?: FillModel;
@@ -104,7 +105,11 @@ export type RealityModelResolutionFailure =
   /** Ни разделённой, ни встроенной формы: обязательные слоты не объявлены. */
   | 'missing_reality_model'
   /** Обе формы присутствуют и НЕ совпадают — какая из них истина, контракт не решает. */
-  | 'conflicting_reality_model';
+  | 'conflicting_reality_model'
+  /** Прогон привязал модель по ref, но вызывающий её не разрезолвил (реестр не отдал). */
+  | 'unresolved_reality_model_ref'
+  /** Разрезолвленная модель — НЕ та, что привязана прогоном: `id@version` не совпадает с ref. */
+  | 'reality_model_ref_mismatch';
 
 /** Исход dual-read-чтения. */
 export type RealityModelResolution =
@@ -116,6 +121,19 @@ export type RealityModelResolution =
       readonly ref?: Ref;
     }
   | { readonly ok: false; readonly reason: RealityModelResolutionFailure };
+
+/**
+ * Вход dual-read-чтения. `realityModelRef` — привязка прогона
+ * (`BacktestRunRequest.realityModelRef`), `realityModel` — то, что вызывающий достал по ней из
+ * реестра. Оба поля даются вместе: без ref нечего сверять, без модели нечего читать.
+ */
+export interface RealityModelReadInput {
+  readonly executionProfile: ExecutionProfile;
+  /** Привязка прогона. Отсутствует ⇒ разделённой формы нет, читается встроенная. */
+  readonly realityModelRef?: Ref;
+  /** Модель, разрезолвленная вызывающим по `realityModelRef`. */
+  readonly realityModel?: RealityModel;
+}
 
 /** Детерминированная сериализация с отсортированными ключами (сравнение форм, не хранение). */
 function canonical(value: unknown): string {
@@ -150,6 +168,10 @@ function slotsOf(src: RealityModelSlots | ExecutionProfile): RealityModelSlots |
  * Прочитать модель среды прогона в dual-read-окне Ф1.
  *
  * Правила (fail-closed, конституция XIV — без молчаливого fallback):
+ * - ref привязан, модель не передана → отказ `unresolved_reality_model_ref`;
+ * - ref привязан, но у модели другой `id@version` → отказ `reality_model_ref_mismatch`
+ *   (иначе прогон исполнялся бы по среде, которую не объявлял, — ровно та подмена, ради
+ *   исключения которой модель вообще сделана версионированной);
  * - только разделённая форма → `reality_model`;
  * - только встроенная в `ExecutionProfile` → `execution_profile_embedded`;
  * - обе и они СОВПАДАЮТ послотно → `reality_model` (миграция консистентна);
@@ -159,16 +181,23 @@ function slotsOf(src: RealityModelSlots | ExecutionProfile): RealityModelSlots |
  * Precedence разделённой формы — правило чтения, а не семантика исполнения: какая модель среды
  * применяется в paper/backtest/live, решает Ф1-SSOT-документ, не этот контракт.
  */
-export function resolveRealityModel(
-  executionProfile: ExecutionProfile,
-  realityModel?: RealityModel,
-): RealityModelResolution {
+export function resolveRealityModel(input: RealityModelReadInput): RealityModelResolution {
+  const { executionProfile, realityModelRef, realityModel } = input;
   const embedded = slotsOf(executionProfile);
+
+  if (realityModelRef !== undefined) {
+    if (realityModel === undefined) return { ok: false, reason: 'unresolved_reality_model_ref' };
+    if (realityModel.id !== realityModelRef.id || realityModel.version !== realityModelRef.version) {
+      return { ok: false, reason: 'reality_model_ref_mismatch' };
+    }
+  }
+
   if (realityModel === undefined) {
     return embedded === undefined
       ? { ok: false, reason: 'missing_reality_model' }
       : { ok: true, source: 'execution_profile_embedded', slots: embedded };
   }
+
   const split = slotsOf(realityModel);
   if (split === undefined) return { ok: false, reason: 'missing_reality_model' };
   if (embedded !== undefined && canonical(embedded) !== canonical(split)) {
