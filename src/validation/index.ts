@@ -9,12 +9,17 @@ import { createSchemaRegistry, type SchemaRegistry } from './schema-registry.js'
 import { validateModule, type ModuleInput } from './validate-module.js';
 import { validateRunRequest, type RunRequestInput } from './validate-run-request.js';
 import { validatePromotion, type PromotionInput } from './validate-promotion.js';
+import { validateRealityModel, type RealityModelInput } from './validate-reality-model.js';
 
-/** Вход валидатора. Армы: `'module'` (US1/US2), `'run_request'` (US6), `'promotion'` (US7). */
+/**
+ * Вход валидатора. Армы: `'module'` (US1/US2), `'run_request'` (US6), `'promotion'` (US7),
+ * `'reality_model'` (Ф1 `shared-execution-engine`).
+ */
 export type ValidationInput =
   | ({ readonly inputKind: 'module' } & ModuleInput)
   | ({ readonly inputKind: 'run_request' } & RunRequestInput)
-  | ({ readonly inputKind: 'promotion' } & PromotionInput);
+  | ({ readonly inputKind: 'promotion' } & PromotionInput)
+  | ({ readonly inputKind: 'reality_model' } & RealityModelInput);
 
 // 042: код-таксономия — часть публичной поверхности валидатора (потребители-гейты сверяют severity).
 export { CODE_SEVERITY, ALL_VALIDATION_CODES } from './codes.js';
@@ -39,6 +44,8 @@ export function validate(input: ValidationInput, contractContext: ContractContex
       return validateRunRequest(input, contractContext, registry());
     case 'promotion':
       return validatePromotion(input);
+    case 'reality_model':
+      return validateRealityModel(input, registry());
     default: {
       const exhaustive: never = input;
       throw new Error(`validate: unsupported inputKind "${String(exhaustive)}"`);
@@ -49,3 +56,4 @@ export function validate(input: ValidationInput, contractContext: ContractContex
 export type { ModuleInput } from './validate-module.js';
 export type { RunRequestInput } from './validate-run-request.js';
 export type { PromotionInput } from './validate-promotion.js';
+export type { RealityModelInput } from './validate-reality-model.js';

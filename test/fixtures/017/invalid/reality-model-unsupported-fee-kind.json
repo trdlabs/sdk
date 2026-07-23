@@ -1,0 +1,9 @@
+{
+  "realityModel": {
+    "id": "unsupported_fee_reality",
+    "version": "1.0.0",
+    "fillModel": { "kind": "next_bar_open" },
+    "feeModel": { "kind": "maker_taker", "makerBps": 1, "takerBps": 5 },
+    "slippageModel": { "kind": "fixed_bps", "bps": 5 }
+  }
+}

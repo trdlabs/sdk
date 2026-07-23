@@ -12,6 +12,8 @@ import type {
   PromotionRequest,
   ReviewDecision,
 } from '../research-contract/module.js';
+import type { RealityModel, RealityModelSlotName } from '../research-contract/reality-model.js';
+import { REALITY_MODEL_SLOTS } from '../research-contract/reality-model.js';
 import type { BacktestRunRequest, Ref, RunPeriod } from '../research-contract/run.js';
 
 /** Канонический порядок lifecycle-хуков (data-model §5). */
@@ -104,6 +106,8 @@ export interface NormalizedRunRequest {
   readonly robustnessChecks: readonly string[];
   readonly riskProfileRef?: Ref;
   readonly executionProfileRef?: Ref;
+  /** Ф1 — привязка версионированной модели среды; отсутствует при чтении встроенной формы. */
+  readonly realityModelRef?: Ref;
 }
 
 /** Построить детерминированный `NormalizedRunRequest` из принятого запроса (порядок overlays сохраняется). */
@@ -125,7 +129,29 @@ export function normalizeRunRequest(request: BacktestRunRequest): NormalizedRunR
     ...base,
     ...(request.riskProfileRef !== undefined ? { riskProfileRef: request.riskProfileRef } : {}),
     ...(request.executionProfileRef !== undefined ? { executionProfileRef: request.executionProfileRef } : {}),
+    ...(request.realityModelRef !== undefined ? { realityModelRef: request.realityModelRef } : {}),
   };
+}
+
+/**
+ * Нормализованная модель среды (Ф1): идентичность + слоты в КАНОНИЧЕСКОМ порядке
+ * (`REALITY_MODEL_SLOTS`), отсутствующие опущены. Порядок ключей фиксирован, чтобы проекция была
+ * байт-стабильной — модель среды попадает в evidence прогона и сверяется по содержимому.
+ */
+export interface NormalizedRealityModel {
+  readonly id: string;
+  readonly version: string;
+  readonly slots: Readonly<Partial<Record<RealityModelSlotName, object>>>;
+}
+
+/** Построить детерминированный `NormalizedRealityModel` из принятой модели среды. */
+export function normalizeRealityModel(model: RealityModel): NormalizedRealityModel {
+  const slots: Partial<Record<RealityModelSlotName, object>> = {};
+  for (const slot of REALITY_MODEL_SLOTS) {
+    const value = model[slot];
+    if (value !== undefined) slots[slot] = value;
+  }
+  return { id: model.id, version: model.version, slots };
 }
 
 /**

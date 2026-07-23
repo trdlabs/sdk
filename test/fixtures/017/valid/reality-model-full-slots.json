@@ -1,0 +1,12 @@
+{
+  "realityModel": {
+    "id": "realism_reality",
+    "version": "1.0.0",
+    "fillModel": { "kind": "same_bar_close" },
+    "feeModel": { "kind": "fixed_bps", "bps": 5 },
+    "slippageModel": { "kind": "fixed_bps", "bps": 5 },
+    "fundingModel": { "kind": "per_minute_prorate", "intervalHours": 8 },
+    "latency": { "kind": "zero" },
+    "partialFill": { "kind": "none" }
+  }
+}

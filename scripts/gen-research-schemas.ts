@@ -40,13 +40,15 @@ function target(type: string, source: string, out: string, title: string): Targe
   };
 }
 
-// 5 core-схем конверта контракта (data-model §13.1, contracts/README.md).
+// Core-схемы конверта контракта (data-model §13.1, contracts/README.md).
+// Ф1 `shared-execution-engine`: +RealityModel (модель среды исполнения как отдельная сущность).
 const TARGETS: ReadonlyArray<Target> = [
   target('ModuleManifest', 'module.ts', 'module-manifest.schema.json', 'ModuleManifest'),
   target('StrategyDecision', 'decision.ts', 'strategy-decision.schema.json', 'StrategyDecision'),
   target('OverlayDecision', 'decision.ts', 'overlay-decision.schema.json', 'OverlayDecision'),
   target('BacktestRunRequest', 'run.ts', 'backtest-run-request.schema.json', 'BacktestRunRequest'),
   target('ValidationResult', 'validation.ts', 'validation-result.schema.json', 'ValidationResult'),
+  target('RealityModel', 'reality-model.ts', 'reality-model.schema.json', 'RealityModel'),
 ];
 
 /**

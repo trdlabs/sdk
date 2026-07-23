@@ -1,0 +1,9 @@
+{
+  "realityModel": {
+    "id": "backtester_default_reality",
+    "version": "1.0.0",
+    "fillModel": { "kind": "next_bar_open" },
+    "feeModel": { "kind": "fixed_bps", "bps": 10 },
+    "slippageModel": { "kind": "fixed_bps", "bps": 5 }
+  }
+}

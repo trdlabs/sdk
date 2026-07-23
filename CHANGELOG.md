@@ -13,6 +13,72 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-23
+
+Phase 1 of the cross-repo initiative `shared-execution-engine` (control-center
+`docs/delivery/initiatives/shared-execution-engine.md`; local status in
+[docs/ROADMAP.md](docs/ROADMAP.md)) — contract shape only. It deliberately decides **nothing**
+about which reality model applies in
+paper / backtest / live, or with what values: those are the Phase-1 semantics SSOT document's
+call, and this release exists so that decision has a vocabulary to be written in.
+
+### Added
+
+- `research-contract`: new **`RealityModel`** — the declared properties of the execution
+  *environment*, split out of `ExecutionProfile` (which keeps *intent*). Runner-owned and
+  versioned by `id`+`version` exactly like `RiskProfile`/`ExecutionProfile`, bound to a run
+  through the new optional `BacktestRunRequest.realityModelRef`. Rationale: the same bundle is
+  today executed by two semantically incompatible interpreters (platform paper vs backtester),
+  and with the model slots typed as bare `object` that divergence was not expressible in the
+  contract — therefore not provable.
+- `research-contract`: every environment slot is now a **closed discriminated catalog** instead of
+  `object` — `FillModel` (`next_bar_open` | `same_bar_close`), `FeeModel` / `SlippageModel`
+  (`fixed_bps`), `FundingModel` (`per_minute_prorate`), `LatencyModel` (`zero` | `fixed_ms`),
+  `PartialFillModel` (`none`). Shapes are taken from the only implementation that already types
+  them (backtester `engine/profiles.ts`); a catalog gains a member when an interpreter implements
+  it, not before. Exported alongside the kind literals (`FILL_MODEL_KINDS`, …) and
+  `REALITY_MODEL_KIND_CATALOG` for consumers that need the closed set at runtime.
+- `research-contract`: **`resolveRealityModel(executionProfile, realityModel?)`** — the one
+  sanctioned read during the dual-read window. Split form and embedded form both resolve; if both
+  are present and agree, the split form wins; if they *disagree* it fails with
+  `conflicting_reality_model` rather than silently picking one, and a missing/incomplete model
+  fails with `missing_reality_model` rather than defaulting (constitution XIV — no silent
+  fallback). The embedded form resolves without a `ref`: an `ExecutionProfile`'s identity is not
+  the reality model's identity.
+- `validation`: new input arm `inputKind: 'reality_model'` plus the sixth core schema
+  `reality-model.schema.json` (`SCHEMA_FILES` / `SCHEMA_IDS` / `schemaAsset`). An off-catalog
+  `kind` gets its own machine-readable code rather than a generic `schema_invalid`, mirroring
+  `unknown_metric` / `unsupported_market_data_kind`: `fillModel` keeps the more specific 024 code
+  `unsupported_fill_model_kind`, and the remaining slots report the new
+  `unsupported_reality_model_kind`. A *recognised* kind carrying a malformed payload stays
+  `schema_invalid`.
+- `research-contract`: `ExecutionProfile` gains optional intent slots `orderType`
+  (`market` | `limit` | `stop_market`) and `timeInForce` (`gtc` | `ioc`), the vocabulary spec 083
+  already uses. Sizing is deliberately still absent — size ceilings are `RiskProfile`'s hard
+  authority (FR-013/FR-015) and must not be restated here.
+
+### Changed
+
+- `research-contract`: `ExecutionProfile.fillModel` / `feeModel` / `slippageModel` are now
+  **optional and `@deprecated`**, and they plus `latency` / `partialFill` are typed to the closed
+  catalogs instead of `object`. They remain accepted for the whole dual-read window — nothing is
+  rejected by this release. Two type-level notes for consumers compiling against these fields:
+  reading them now yields `T | undefined` (a profile that delegates to a `realityModelRef` carries
+  no embedded slots), and assigning an off-catalog object no longer type-checks. No repo in the
+  ecosystem imports `ExecutionProfile` from this package today — `backtester` declares its own
+  copy in `packages/research-contracts` — so the practical blast radius is zero; use
+  `resolveRealityModel` rather than reading the slots directly.
+- `research-contract`: `fundingModel` (035, backtester-only until now) is part of the contract for
+  the first time, as a `RealityModel` slot and a deprecated `ExecutionProfile` slot.
+
+### Migration
+
+Additive; no consumer has to move. During the dual-read window an `ExecutionProfile` may carry the
+model slots inline as before. To adopt the split form, register the environment as a `RealityModel`
+and point at it with `realityModelRef` (on the run request, or on the execution profile). The
+embedded form stops being accepted only after platform, backtester and lab consume the split form
+— one minor plus one major cycle away, announced separately.
+
 ## [0.11.0] - 2026-07-20
 
 ### Added
@@ -144,7 +210,8 @@ tag sequence jumps 0.9.3 → 0.9.5.
   conformance harness. Added Apache-2.0 license, README, publish allowlist gate,
   and the sdk-release workflow.
 
-[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.11.0...HEAD
+[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.12.0...HEAD
+[0.12.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.12.0
 [0.11.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.11.0
 [0.10.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.10.0
 [0.9.5]: https://github.com/trdlabs/sdk/releases/tag/sdk-v0.9.5

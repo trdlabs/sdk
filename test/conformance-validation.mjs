@@ -16,7 +16,13 @@ const { platformContractContext } = await import('../dist/research-contract/inde
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const inputKindOf = (fx) =>
-  'request' in fx ? 'run_request' : 'promotion' in fx ? 'promotion' : 'module';
+  'request' in fx
+    ? 'run_request'
+    : 'promotion' in fx
+      ? 'promotion'
+      : 'realityModel' in fx
+        ? 'reality_model'
+        : 'module';
 
 // Known-стратегии — собрать ТОЛЬКО из valid-фикстур (чтобы invalid с bogus-ref честно отклонялись).
 const knownStrategies = new Set();

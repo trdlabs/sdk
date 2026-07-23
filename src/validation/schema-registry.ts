@@ -16,13 +16,14 @@ import { fileURLToPath } from 'node:url';
 import { Ajv } from 'ajv';
 import type { ErrorObject, ValidateFunction } from 'ajv';
 
-/** Имена 5 core-схем конверта контракта (файлы в specs/.../contracts/). */
+/** Имена core-схем конверта контракта (файлы в specs/.../contracts/). */
 export type CoreSchemaName =
   | 'module-manifest'
   | 'strategy-decision'
   | 'overlay-decision'
   | 'backtest-run-request'
-  | 'validation-result';
+  | 'validation-result'
+  | 'reality-model';
 
 const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
   'module-manifest': 'module-manifest.schema.json',
@@ -30,6 +31,7 @@ const SCHEMA_FILES: Readonly<Record<CoreSchemaName, string>> = {
   'overlay-decision': 'overlay-decision.schema.json',
   'backtest-run-request': 'backtest-run-request.schema.json',
   'validation-result': 'validation-result.schema.json',
+  'reality-model': 'reality-model.schema.json',
 };
 
 /** `$id` каждой core-схемы (совпадает с генерируемым `schemaId`, gen_research_schemas.ts). */
@@ -39,6 +41,7 @@ export const SCHEMA_IDS: Readonly<Record<CoreSchemaName, string>> = {
   'overlay-decision': 'https://trading-platform/017/overlay-decision.schema.json',
   'backtest-run-request': 'https://trading-platform/017/backtest-run-request.schema.json',
   'validation-result': 'https://trading-platform/017/validation-result.schema.json',
+  'reality-model': 'https://trading-platform/017/reality-model.schema.json',
 };
 
 /** Результат компиляции author-supplied paramsSchema. */
