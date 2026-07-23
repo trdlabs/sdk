@@ -109,7 +109,14 @@ export type RealityModelResolutionFailure =
   /** Прогон привязал модель по ref, но вызывающий её не разрезолвил (реестр не отдал). */
   | 'unresolved_reality_model_ref'
   /** Разрезолвленная модель — НЕ та, что привязана прогоном: `id@version` не совпадает с ref. */
-  | 'reality_model_ref_mismatch';
+  | 'reality_model_ref_mismatch'
+  /**
+   * Модель передана БЕЗ привязки прогона. Зеркало `reality_model_ref_mismatch`: там прогон
+   * привязал одну модель, а подсунули другую; здесь прогон не привязывал НИЧЕГО, а модель всё
+   * равно подана. Принять её значило бы, что идентичность модели удостоверяет сама модель, —
+   * тогда единственная точка привязки (`BacktestRunRequest.realityModelRef`) обходится тривиально.
+   */
+  | 'unbound_reality_model';
 
 /** Исход dual-read-чтения. */
 export type RealityModelResolution =
@@ -122,18 +129,37 @@ export type RealityModelResolution =
     }
   | { readonly ok: false; readonly reason: RealityModelResolutionFailure };
 
-/**
- * Вход dual-read-чтения. `realityModelRef` — привязка прогона
- * (`BacktestRunRequest.realityModelRef`), `realityModel` — то, что вызывающий достал по ней из
- * реестра. Оба поля даются вместе: без ref нечего сверять, без модели нечего читать.
- */
-export interface RealityModelReadInput {
+/** Вход чтения, когда прогон модель среды НЕ привязывал: читается встроенная форма. */
+export interface EmbeddedRealityModelReadInput {
   readonly executionProfile: ExecutionProfile;
-  /** Привязка прогона. Отсутствует ⇒ разделённой формы нет, читается встроенная. */
-  readonly realityModelRef?: Ref;
-  /** Модель, разрезолвленная вызывающим по `realityModelRef`. */
+  /** Привязки нет. Поле объявлено явно, чтобы `realityModel` было нечем «протащить» мимо ref. */
+  readonly realityModelRef?: undefined;
+  readonly realityModel?: undefined;
+}
+
+/** Вход чтения, когда прогон привязал модель среды по ref. */
+export interface BoundRealityModelReadInput {
+  readonly executionProfile: ExecutionProfile;
+  /** Привязка прогона (`BacktestRunRequest.realityModelRef`). */
+  readonly realityModelRef: Ref;
+  /**
+   * Модель, разрезолвленная вызывающим по `realityModelRef`. Может отсутствовать (реестр не
+   * отдал) — тогда чтение падает в `unresolved_reality_model_ref`, а не читает встроенную форму.
+   */
   readonly realityModel?: RealityModel;
 }
+
+/**
+ * Вход dual-read-чтения. Union, а не один интерфейс с двумя опциональными полями: модель среды
+ * может прийти ТОЛЬКО вместе с привязкой прогона. Иначе идентичность модели удостоверяла бы
+ * сама модель, и заявленная единственная точка привязки не значила бы ничего.
+ *
+ * Тип закрывает это на компиляции; `unbound_reality_model` — тот же инвариант в рантайме, для
+ * вызывающих из JS и для данных, пришедших с границы нетипизированными.
+ */
+export type RealityModelReadInput =
+  | EmbeddedRealityModelReadInput
+  | BoundRealityModelReadInput;
 
 /** Детерминированная сериализация с отсортированными ключами (сравнение форм, не хранение). */
 function canonical(value: unknown): string {
@@ -168,10 +194,12 @@ function slotsOf(src: RealityModelSlots | ExecutionProfile): RealityModelSlots |
  * Прочитать модель среды прогона в dual-read-окне Ф1.
  *
  * Правила (fail-closed, конституция XIV — без молчаливого fallback):
+ * - модель передана без привязки прогона → отказ `unbound_reality_model`;
  * - ref привязан, модель не передана → отказ `unresolved_reality_model_ref`;
  * - ref привязан, но у модели другой `id@version` → отказ `reality_model_ref_mismatch`
- *   (иначе прогон исполнялся бы по среде, которую не объявлял, — ровно та подмена, ради
- *   исключения которой модель вообще сделана версионированной);
+ *   (вместе с предыдущим правилом это закрывает подмену с ОБЕИХ сторон: нельзя ни подменить
+ *   привязанную модель другой, ни подать модель, которую прогон не привязывал, — ровно те
+ *   подмены, ради исключения которых модель вообще сделана версионированной);
  * - только разделённая форма → `reality_model`;
  * - только встроенная в `ExecutionProfile` → `execution_profile_embedded`;
  * - обе и они СОВПАДАЮТ послотно → `reality_model` (миграция консистентна);
@@ -185,7 +213,10 @@ export function resolveRealityModel(input: RealityModelReadInput): RealityModelR
   const { executionProfile, realityModelRef, realityModel } = input;
   const embedded = slotsOf(executionProfile);
 
-  if (realityModelRef !== undefined) {
+  if (realityModelRef === undefined) {
+    // Непривязанная модель не «почти привязанная»: без ref прогона её нечем удостоверить.
+    if (realityModel !== undefined) return { ok: false, reason: 'unbound_reality_model' };
+  } else {
     if (realityModel === undefined) return { ok: false, reason: 'unresolved_reality_model_ref' };
     if (realityModel.id !== realityModelRef.id || realityModel.version !== realityModelRef.version) {
       return { ok: false, reason: 'reality_model_ref_mismatch' };

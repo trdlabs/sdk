@@ -53,7 +53,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsx scripts/gen-research-schemas.ts --check && tsc -p tsconfig.json && tsc -p tsconfig.conformance.json && cp -r src/validation/schemas dist/validation/schemas",
+    "build": "rm -rf dist && tsx scripts/gen-research-schemas.ts --check && tsc -p tsconfig.json && tsc -p tsconfig.conformance.json && tsc -p tsconfig.test.json && cp -r src/validation/schemas dist/validation/schemas",
     "test": "tsx --test --test-force-exit \"test/**/*.test.ts\"",
     "gen:schemas": "tsx scripts/gen-research-schemas.ts",
     "conformance:validation": "node test/conformance-validation.mjs",
