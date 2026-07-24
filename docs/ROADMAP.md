@@ -100,3 +100,45 @@ local status only, no plan duplication.
 
 Full analysis: control-center
 [`docs/analysis/10-shared-execution-kernel.md`](../../control-center/docs/analysis/10-shared-execution-kernel.md).
+
+## CI workflow hardening (cross-repo, 2026-07-24)
+
+Canonical status lives in the control-center
+[initiative registry](../../control-center/docs/delivery/cross-repo-initiatives.md) —
+local status only, no plan duplication.
+
+- [ci-workflow-hardening](../../control-center/docs/delivery/initiatives/ci-workflow-hardening.md) — `implementing`.
+  SDK part is **CI-1, delivered** ([#31](https://github.com/trdlabs/sdk/pull/31)): this repo was the
+  only one of the seven with no PR gate at all — tests ran solely inside the manual
+  `sdk-release.yml` (`workflow_dispatch`), so a change first met a gate at publish time and
+  everything before that was self-reported. For the ecosystem's contract source of truth that is
+  the wrong place to find out.
+  - `.github/workflows/pr-check.yml` runs on every `pull_request` and on push to `main`. Its gate is
+    `npm run check` and nothing else; `sdk-release.yml` now calls the same script, so "green on the
+    PR" and "green at release" cannot drift into meaning different things. The composition —
+    `npm test && npm run build && npm run conformance:validation`, taken verbatim from the release
+    workflow's old test phase — lives in `package.json`, once. Re-listing the steps per workflow is
+    the platform migration-`0026` failure mode (a self-test that restated the migration set instead
+    of reading the registry, and disagreed with it the moment the registry moved).
+  - pr-check **cannot** publish, not merely does not: `contents: read` and nothing else — no
+    `id-token: write` (npm provenance/OIDC), no `packages:`, no `registry-url`, no secrets.
+    Publishing `@trdlabs/sdk` stays solely with `sdk-release.yml` under a human's
+    `workflow_dispatch`, after the same gate. Release semantics (fail-closed version checks,
+    OIDC provenance, `sdk:pack`/`sdk:verify`, secondary tag) were not touched.
+  - The gate was verified **red** on a deliberately broken throwaway PR before being trusted:
+    [run 30113549635](https://github.com/trdlabs/sdk/actions/runs/30113549635/job/89548613241)
+    (`fail 1`, exit 1, chain stopped at the `npm test` phase). `check` is a required status check on
+    `main` as of the same day.
+  - Both workflows' shape is pinned by tests, so the invariants above fail loudly rather than
+    erode: `test/pr-check-workflow-guard.test.ts` (triggers, shared entry, no publish capability,
+    concurrency, `npm ci`, action pins and Node major shared with the release) and
+    `test/release-workflow-guard.test.ts`.
+
+  Still open for this repo, and deliberately not done here: CI-3/CI-4 will fold `pr-check` and
+  `sdk-release` into canonical `workflow_call` templates once the owner decides where templates
+  live (`trdlabs/.github` vs control-center) — today's `pr-check.yml` is exactly the local copy that
+  migration will consume.
+
+Full audit: control-center
+[`docs/analysis/15-ci-testing-observability-audit.md`](../../control-center/docs/analysis/15-ci-testing-observability-audit.md)
+(§3.2/§8, gap G1).
