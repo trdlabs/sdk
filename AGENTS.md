@@ -55,12 +55,20 @@ orchestration, raw platform storage.
 ## Команды
 ```bash
 npm install
+npm run check                    # ЕДИНЫЙ гейт: test → build → conformance:validation
 npm run build                    # gen schemas + tsc + copy schema assets
 npm run gen:schemas              # regenerate research JSON schemas
 npm run conformance:validation   # conformance test suite
 npm run sdk:pack                 # npm pack → .artifacts/sdk/
 npm run sdk:verify               # verify packed tarball (run after sdk:pack)
 ```
+
+`check` — то же самое и в том же порядке, что гоняет CI: и PR-гейт
+(`.github/workflows/pr-check.yml`, на каждый `pull_request` и push в main), и
+релизный workflow. Состав живёт только в `package.json`, чтобы «зелёный локально»,
+«зелёный на PR» и «зелёный на релизе» не разошлись в смысле; форма обоих workflow
+зафиксирована тестами `test/pr-check-workflow-guard.test.ts` и
+`test/release-workflow-guard.test.ts`.
 
 ## Правила для агента
 - **SDK changes = contract changes.** Обновляй examples, version metadata, changelog
@@ -69,12 +77,15 @@ npm run sdk:verify               # verify packed tarball (run after sdk:pack)
   см. `../control-center/docs/delivery/cross-repo-change-playbook.md`.
 - Не тянуть platform internals; SDK остаётся standalone facade.
 - Деньги — только `decimal.js`.
-- Перед релизом: `build`, `conformance:validation`, `sdk:pack`, `sdk:verify`.
+- Перед релизом: `check` (в нём `test` → `build` → `conformance:validation`),
+  затем `sdk:pack`, `sdk:verify`.
 - **Канонический канал доставки — npm (`@trdlabs/sdk`), и только он.** Релиз =
   `npm publish`, а не GitHub-артефакт. Публикация — через workflow **SDK Release**
   (`.github/workflows/sdk-release.yml`, `workflow_dispatch`), который сам гоняет
-  `npm ci → test → build → sdk:pack → sdk:verify → npm publish --access public --provenance`
+  `npm ci → check → sdk:pack → sdk:verify → npm publish --access public --provenance`
   и fail-closed, если версия уже есть в npm или `package.json` version ≠ input.
+  Публиковать умеет **только** он: у `pr-check` нет ни `id-token`, ни secrets, ни
+  registry-url — PR-гейт физически не является каналом публикации.
 - `npm pack` / `sdk:verify` — **только verification** упаковки перед публикацией,
   не канал доставки. GitHub tag/release — вторичная release-note без tarball.
 - Реестр npm иммутабелен: ошибка правится новым patch-релизом, не переизданием.

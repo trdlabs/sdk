@@ -71,16 +71,14 @@ jobs:
 
       # ── Build and verify (verification only — not delivery) ────────────────
 
-      - name: Test SDK
-        run: npm test
-
-      - name: Build SDK
-        run: npm run build
-
-      # Обязательный release gate (AGENTS.md «Перед релизом»): 017-фикстуры через published
-      # surface @trdlabs/sdk/validation. Гоняется ПОСЛЕ build — harness импортирует dist/.
-      - name: Validation conformance (017 fixtures via published surface)
-        run: npm run conformance:validation
+      # Единый вход, тот же самый, что гоняет pr-check.yml на каждом PR: test → build →
+      # conformance:validation (обязательный release gate из AGENTS.md «Перед релизом» —
+      # 017-фикстуры через published surface @trdlabs/sdk/validation; идёт ПОСЛЕ build, потому что
+      # harness импортирует dist/). Состав живёт в package.json, в одном месте: перечисление шагов
+      # здесь и в pr-check — это ровно тот дрейф, из-за которого «зелёный на PR» и «зелёный на
+      # релизе» перестают значить одно и то же.
+      - name: Gate (npm run check)
+        run: npm run check
 
       - name: Pack SDK (verification)
         run: npm run sdk:pack
