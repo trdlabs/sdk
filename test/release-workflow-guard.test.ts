@@ -40,12 +40,15 @@ test('release workflow ships no GitHub tarball (.tgz) delivery channel', () => {
 // AGENTS.md «Перед релизом»: build, conformance:validation, sdk:pack, sdk:verify. A gate the
 // workflow does not run is not a gate — conformance:validation was missing until this test.
 //
+// `npm run check` is the composed test+build+conformance gate, shared verbatim with the pr-check
+// workflow so both agree on what green means; its internal composition and ordering are asserted in
+// test/pr-check-workflow-guard.test.ts. Packing stays release-local: it verifies the tarball this
+// workflow is about to publish, and a PR has nothing to pack.
+//
 // Matching is anchored to `run:` so a mention in the file's header comment cannot pass for an
 // executed step (the header does say "after a successful npm publish").
 const GATES = [
-  'npm test',
-  'npm run build',
-  'npm run conformance:validation',
+  'npm run check',
   'npm run sdk:pack',
   'npm run sdk:verify',
 ] as const;
@@ -61,11 +64,11 @@ test('release workflow runs every mandatory pre-release gate', () => {
   }
 });
 
-test('conformance gate runs after the build it validates', () => {
-  // The harness imports dist/ — running it before `npm run build` would validate stale output.
+test('packing verifies output the composed gate already built', () => {
+  // sdk:pack tars up dist/, which `check` produces — packing first would ship stale or absent output.
   assert.ok(
-    stepAt('npm run conformance:validation') > stepAt('npm run build'),
-    'conformance:validation must come after npm run build',
+    stepAt('npm run sdk:pack') > stepAt('npm run check'),
+    'sdk:pack must come after npm run check',
   );
 });
 

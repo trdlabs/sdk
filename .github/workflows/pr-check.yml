@@ -1,0 +1,53 @@
+# PR gate — runs the composed test/build/conformance gate on every pull request and on main.
+#
+# Until this existed, sdk was the only repo of the seven with no PR gate at all: its tests ran
+# solely inside sdk-release.yml, a manual `workflow_dispatch`. That meant a change first met a gate
+# at publish time, and everything before that was self-reported. sdk is the ecosystem's contract
+# source of truth (`@trdlabs/sdk`, consumed by platform, lab, backtester and mock-platform), so a
+# contract regression reaching the registry is exactly the failure worth catching earliest.
+#
+# The gate is `npm run check` and nothing else. sdk-release.yml calls the same script, so "green on
+# the PR" and "green at release" cannot drift into meaning different things — the composition lives
+# in package.json, once. Enumerating the individual steps here is the platform migration-0026
+# failure mode (a self-test that restated the migration set instead of reading the registry, and
+# disagreed with it the moment the registry moved).
+#
+# This workflow deliberately CANNOT publish. It requests `contents: read` and nothing more: no
+# `id-token: write` (npm provenance/OIDC), no `packages:`, no registry-url, no repository secrets.
+# Publishing @trdlabs/sdk stays the sole job of sdk-release.yml, under a human's workflow_dispatch,
+# after the same gate. A check that could publish is a publication path wearing a check's name.
+# test/pr-check-workflow-guard.test.ts holds all of the above in place.
+name: PR check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only. Nothing here may write to the repository, packages, or the npm registry.
+permissions:
+  contents: read
+
+# A newer push makes the previous run's verdict irrelevant, on a PR branch or on main.
+concurrency:
+  group: pr-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Node 22 and the action versions are kept identical to sdk-release.yml: a gate that runs on a
+      # different toolchain than the release is not gating the release.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The same single entry sdk-release.yml gates on: test + build + conformance:validation.
+      - name: Gate (npm run check)
+        run: npm run check
