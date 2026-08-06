@@ -13,6 +13,7 @@ export * from './context.js';
 export * from './indicators.js';
 export * from './event-driven.js';
 export * from './observation-status.js';
+export * from './actor-state.js';
 export * from './reality-model.js';
 export * from './risk-execution.js';
 export * from './run.js';

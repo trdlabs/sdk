@@ -22,7 +22,10 @@ import {
   timestampUs,
   type ActorCommand,
   type ActorContext,
+  type ActorInit,
   type ActorInputEvent,
+  type ActorSubscriptionDescriptor,
+  type EventDrivenModule,
   type FundingReading,
   type LiqPoint,
   type MarketDataRequirement,
@@ -200,6 +203,10 @@ const CTX_STUB: ActorContext = {
   // 083 S1 задача 3: ActorContext вырос на readiness; для тестов диспетчера/хендлеров ниже
   // конкретное значение не важно (они не проверяют place-gate), фиксируем 'ready'.
   readiness: 'ready',
+  // 083 S1 задача 5: ActorContext вырос на orders/position (pull-модель). Тесты диспетчера ниже
+  // не читают ни то ни другое — flat/без открытых заявок достаточно, чтобы типизироваться.
+  orders: { open: () => [] },
+  position: () => undefined,
 };
 
 /** Обёртка значения в `ObservedValue<T>` — `final`/`0`, единственная законная комбинация v1. */
@@ -220,6 +227,25 @@ const PLACE: ActorCommand = {
   qtyUsd: 100,
   price: 1.4,
 };
+
+// --- ActorInit (задача 5, требование 1a): subscriptions ---
+
+test('ActorInit несёт закрытый список ActorSubscriptionDescriptor; EventDrivenModule.createActor его получает', () => {
+  const subscriptions: readonly ActorSubscriptionDescriptor[] = [
+    { subscriptionId: 'binance:BTCUSDT:candles:1m', kind: 'candles', requirementId: 'req-candles' },
+  ];
+  const init: ActorInit = { params: {}, seed: 1, symbol: 'BTCUSDT', subscriptions };
+  let seenInit: ActorInit | undefined;
+  const module: EventDrivenModule = {
+    createActor: (i) => {
+      seenInit = i;
+      return defineActor({});
+    },
+  };
+  const actor = module.createActor(init);
+  assert.deepEqual(seenInit?.subscriptions, subscriptions);
+  assert.deepEqual(actor.onEvent(CANDLE_CLOSED, CTX_STUB), []);
+});
 
 test('defineActor: специфичный хендлер получает событие своего вида', () => {
   const actor = defineActor({ onMarketCandleClosed: () => [PLACE] });
