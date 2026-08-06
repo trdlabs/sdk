@@ -18,10 +18,16 @@ import {
   SUPPORTED_CONTRACT_VERSIONS,
   defineActor,
   platformContractContext,
+  timestampUs,
   type ActorCommand,
   type ActorContext,
   type ActorInputEvent,
+  type FundingReading,
+  type LiqPoint,
   type ModuleManifest,
+  type ObservedValue,
+  type OiPoint,
+  type TakerReading,
 } from '../src/research-contract/index.js';
 import { validate, schemaAsset } from '../src/validation/index.js';
 import { createSchemaRegistry } from '../src/validation/schema-registry.js';
@@ -171,16 +177,18 @@ test('event_driven НЕ требует onBarClose (правило принадл
 // --- defineActor ---
 
 const CTX_STUB: ActorContext = {
-  clock: { now: () => 1_700_000_000_000 },
+  clock: { nowUs: () => timestampUs(1_700_000_000_000_000) },
   rng: { next: () => 0.5 },
-  orders: { open: () => [] },
-  position: () => null,
 };
 
-const BAR: ActorInputEvent = {
-  kind: 'bar',
-  ts: 1_700_000_000_000,
-  bar: { ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+/** Обёртка значения в `ObservedValue<T>` — `final`/`0`, единственная законная комбинация v1. */
+function observed<T>(value: T): ObservedValue<T> {
+  return { effectiveTsUs: timestampUs(1_700_000_000_000_000), value, finality: 'final', revision: 0 };
+}
+
+const CANDLE_CLOSED: ActorInputEvent = {
+  kind: 'market.candle.closed',
+  bar: observed({ ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }),
 };
 
 const PLACE: ActorCommand = {
@@ -193,30 +201,38 @@ const PLACE: ActorCommand = {
 };
 
 test('defineActor: специфичный хендлер получает событие своего вида', () => {
-  const actor = defineActor({ onBar: () => [PLACE] });
-  assert.deepEqual(actor.onEvent(BAR, CTX_STUB), [PLACE]);
+  const actor = defineActor({ onMarketCandleClosed: () => [PLACE] });
+  assert.deepEqual(actor.onEvent(CANDLE_CLOSED, CTX_STUB), [PLACE]);
 });
 
 test('defineActor: одиночная команда и null нормализуются к батчу', () => {
-  assert.deepEqual(defineActor({ onBar: () => PLACE }).onEvent(BAR, CTX_STUB), [PLACE]);
-  assert.deepEqual(defineActor({ onBar: () => null }).onEvent(BAR, CTX_STUB), []);
-  assert.deepEqual(defineActor({ onBar: () => undefined }).onEvent(BAR, CTX_STUB), []);
+  assert.deepEqual(defineActor({ onMarketCandleClosed: () => PLACE }).onEvent(CANDLE_CLOSED, CTX_STUB), [
+    PLACE,
+  ]);
+  assert.deepEqual(defineActor({ onMarketCandleClosed: () => null }).onEvent(CANDLE_CLOSED, CTX_STUB), []);
+  assert.deepEqual(
+    defineActor({ onMarketCandleClosed: () => undefined }).onEvent(CANDLE_CLOSED, CTX_STUB),
+    [],
+  );
 });
 
 test('defineActor: вид без своего хендлера уходит в catch-all onEvent', () => {
   const seen: string[] = [];
   const actor = defineActor({
-    onBar: () => [],
+    onMarketCandleClosed: () => [],
     onEvent: (e) => {
       seen.push(e.kind);
       return [];
     },
   });
   for (const kind of ACTOR_INPUT_EVENT_KINDS) {
-    if (kind === 'bar') continue;
+    if (kind === 'market.candle.closed') continue;
     actor.onEvent(eventOf(kind), CTX_STUB);
   }
-  assert.deepEqual(seen, ACTOR_INPUT_EVENT_KINDS.filter((k) => k !== 'bar'));
+  assert.deepEqual(
+    seen,
+    ACTOR_INPUT_EVENT_KINDS.filter((k) => k !== 'market.candle.closed'),
+  );
 });
 
 test('defineActor: специфичный хендлер имеет приоритет над catch-all', () => {
@@ -234,7 +250,12 @@ test('defineActor: без хендлеров актор ничего не дел
 test('defineActor: диспетчер покрывает ровно замкнутый каталог видов событий', () => {
   const handled: string[] = [];
   const actor = defineActor({
-    onBar: (e) => void handled.push(e.kind),
+    onMarketCandleClosed: (e) => void handled.push(e.kind),
+    onMarketOpenInterestObserved: (e) => void handled.push(e.kind),
+    onMarketLiquidationsBucketClosed: (e) => void handled.push(e.kind),
+    onMarketTakerVolumeBucketClosed: (e) => void handled.push(e.kind),
+    onMarketFundingObserved: (e) => void handled.push(e.kind),
+    onMarketSubscriptionStatusChanged: (e) => void handled.push(e.kind),
     onOrderAccepted: (e) => void handled.push(e.kind),
     onOrderDenied: (e) => void handled.push(e.kind),
     onOrderRejected: (e) => void handled.push(e.kind),
@@ -270,7 +291,7 @@ test('обе стороны конверта «событие → команды
 });
 
 test('через границу изолята валидируется БАТЧ, как его возвращает onEvent', () => {
-  const batch = defineActor({ onBar: () => [PLACE] }).onEvent(BAR, CTX_STUB);
+  const batch = defineActor({ onMarketCandleClosed: () => [PLACE] }).onEvent(CANDLE_CLOSED, CTX_STUB);
   assert.deepEqual(registry.validateCore('actor-command-batch', batch), []);
   assert.deepEqual(registry.validateCore('actor-command-batch', []), []);
   assert.ok(registry.validateCore('actor-command-batch', PLACE).length > 0, 'не массив');
@@ -328,8 +349,18 @@ test('однозначные варианты тех же команд прин�
 /** Минимальное событие каждого вида (для проверок диспетчера). */
 function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEvent {
   switch (kind) {
-    case 'bar':
-      return BAR;
+    case 'market.candle.closed':
+      return CANDLE_CLOSED;
+    case 'market.open_interest.observed':
+      return { kind, oi: observed<OiPoint>({ ts: 1, oiTotalUsd: 1_000 }) };
+    case 'market.liquidations.bucket_closed':
+      return { kind, liq: observed<LiqPoint>({ ts: 1, longUsd: 0, shortUsd: 0 }) };
+    case 'market.taker_volume.bucket_closed':
+      return { kind, taker: observed<TakerReading>({ state: 'missing' }) };
+    case 'market.funding.observed':
+      return { kind, funding: observed<FundingReading>({ state: 'missing' }) };
+    case 'market.subscription.status_changed':
+      return { kind, status: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) };
     case 'order.accepted':
       return { kind, ts: 1, clientOrderId: 'o-1' };
     case 'order.denied':

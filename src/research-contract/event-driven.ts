@@ -22,7 +22,8 @@
 // - `order.denied` (локальный отказ риска) ≠ `order.rejected` (отказ venue/симулятора) —
 //   заимствовано у Nautilus; различимость нужна стратегии, чтобы не долбиться в закрытую дверь.
 // - ctx — PULL-модель (Nautilus Cache): снапшот `orders`/`position` в конверте события УЖЕ
-//   отражает доставляемое событие (инвариант state-before-handler).
+//   отражает доставляемое событие (инвариант state-before-handler). Сам состав `orders()`/
+//   `position()` в `ActorContext` эта задача (S1/2) НЕ вводит — заглушка ждёт задачу 5.
 
 import type { Bar } from './context.js';
 import type {
@@ -31,7 +32,7 @@ import type {
   OiPoint,
   TakerReading,
 } from './market-tape.js';
-import type { OrderType, TimeInForce } from './risk-execution.js';
+import type { TimeInForce } from './risk-execution.js';
 import type { TimestampUs } from './time-us.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,76 +132,112 @@ export interface ObservedValue<T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Читаемое состояние (pull-модель ctx).
+// Сторона заявки — общий тип для команд ниже.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// `OpenOrderStatus`/`OpenOrderView`/`PositionView`/`FlatMarketSlice` (017/S1-задача-1 черновик)
+// снесены вместе со старой формой `ActorContext`: они существовали ТОЛЬКО как её опора
+// (`ctx.orders.open()` / `ctx.position()` / плоский рыночный срез `bar`-события). Задача 5
+// проектирует pull-модель ctx заново, начиная с чистого места, — оставлять эти типы висящими
+// без потребителя значило бы выдавать черновую форму за уже принятое решение.
 
 /** Сторона заявки. Отдельно от `'long' | 'short'` решений 017: заявка — buy/sell, не позиция. */
 export type OrderSide = 'buy' | 'sell';
-
-/**
- * Статус ОТКРЫТОЙ заявки — нетерминальное подмножество ордер-FSM. Терминальные статусы
- * (`filled`/`canceled`/`rejected`/`denied`/`expired`) в `ctx.orders.open()` не встречаются: они
- * доставляются событиями. Полная FSM — зона движка (E3), здесь только то, что видит стратегия.
- */
-export type OpenOrderStatus = 'submitted' | 'accepted' | 'triggered' | 'partially_filled';
-
-/** Снимок открытой заявки в контексте актора. */
-export interface OpenOrderView {
-  readonly clientOrderId: string;
-  readonly side: OrderSide;
-  readonly type: OrderType;
-  readonly status: OpenOrderStatus;
-  /** Запрошенный нотионал заявки в USD. */
-  readonly qtyUsd: number;
-  /** Уже исполненная часть нотионала (0, пока филлов не было). */
-  readonly filledQtyUsd: number;
-  readonly price?: number;
-  readonly stopPrice?: number;
-  readonly reduceOnly?: boolean;
-  /** business_ts подачи заявки (часы данных, не wall-clock). */
-  readonly createdTs: number;
-}
-
-/** Снимок позиции в контексте актора (NETTING: одна позиция на инструмент). */
-export interface PositionView {
-  readonly side: 'long' | 'short';
-  /** Размер в базовой валюте инструмента. */
-  readonly qty: number;
-  readonly avgPrice: number;
-  readonly unrealizedPnl?: number;
-}
-
-/**
- * Плоский point-in-time рыночный срез, прикладываемый к `bar`-событию. В отличие от
- * `PointInTimeMarketApi` (017/023, методы) — ЧИСТЫЕ ДАННЫЕ: конверт события пересекает
- * JSON-границу изолята, функции через неё не проходят.
- *
- * Слот присутствует по тому же composition-following правилу, что и `StrategyContext.market`:
- * по составу ленты, а НЕ по декларации `dataNeeds` (FR-010).
- */
-export interface FlatMarketSlice {
-  readonly oi?: OiPoint;
-  readonly liq?: LiqPoint;
-  readonly funding?: FundingReading;
-  readonly taker?: TakerReading;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ActorInputEvent — что хост доставляет актору.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Закрытие бара. Несёт окно закрытых свечей: у актора нет `data`-API — всё, что он может
- * прочитать о прошлом, приходит в конверте. Forward-поверхности нет структурно (FR-011).
- */
-export interface ActorBarEvent {
-  readonly kind: 'bar';
-  readonly ts: number;
-  readonly bar: Bar;
-  /** Закрытые свечи строго ДО `bar`, не более объявленного статического max-lookback. */
-  readonly closedCandles?: readonly Bar[];
-  readonly market?: FlatMarketSlice;
+// Составного `market.bar.closed` НЕТ (был `ActorBarEvent`, снесён вместе с `closedCandles` и
+// `FlatMarketSlice`). У КАЖДОГО `subscriptionId` ровно один binding и один `datasetId` (S1,
+// конверт §3.1, `ActorEnvelope`) — составное событие не имеет однозначно ни того ни другого:
+// у него по определению нет единственного источника. Источники к тому же приходят в разное
+// время (funding — sparse change-point, taker/liq — dense per-minute бакеты, OI — point
+// observation) и несут разную семантику значения (уровень vs интервальный агрегат) — склеивать
+// их в один JSON-объект означало бы либо ждать самого медленного источника перед эмиссией
+// (искусственная задержка), либо слать событие с полями-дырами (какие обязательны?). Пять
+// раздельных `kind`, по одному типу значения на каждый, устраняют оба вопроса структурно, а не
+// соглашением.
+//
+// Каждое рыночное событие несёт `subscriptionId` НЕ своим полем, а через `ActorEnvelope`,
+// которым его доставляет хост (§3.1) — дублировать идентификатор подписки внутри `event`
+// значило бы держать два источника истины для одного и того же ID. Окон (свечей, oi, портфеля,
+// позиции) события тоже не несут: актор либо получает значение как поток отдельных наблюдений
+// (эта форма), либо как окно через будущий pull-API ctx (задача 5) — конверт события не смешивает
+// оба способа доступа.
+
+/** Закрытая (историческая) свеча по своему `subscriptionId`. Значение — `Bar` (017). */
+export interface MarketCandleClosedEvent {
+  readonly kind: 'market.candle.closed';
+  readonly bar: ObservedValue<Bar>;
 }
+
+/**
+ * Open interest — **point observation**: `oi.value` есть УРОВЕНЬ на момент `oi.effectiveTsUs`,
+ * а не приращение с прошлого наблюдения (в отличие от liq/taker-бакетов ниже, которые суммируют
+ * события ВНУТРИ интервала).
+ */
+export interface MarketOpenInterestObservedEvent {
+  readonly kind: 'market.open_interest.observed';
+  readonly oi: ObservedValue<OiPoint>;
+}
+
+/** Ликвидации — **interval aggregate** за закрытый бакет своего `subscriptionId`. */
+export interface MarketLiquidationsBucketClosedEvent {
+  readonly kind: 'market.liquidations.bucket_closed';
+  readonly liq: ObservedValue<LiqPoint>;
+}
+
+/** Taker-объём — **interval aggregate** за закрытый минутный бакет своего `subscriptionId`. */
+export interface MarketTakerVolumeBucketClosedEvent {
+  readonly kind: 'market.taker_volume.bucket_closed';
+  readonly taker: ObservedValue<TakerReading>;
+}
+
+/**
+ * Funding: rate либо settlement — различаются явно через `FundingReading`/`FundingPoint` (030),
+ * а не отдельными `kind` этой задачи. Расщепление «периодический rate-тик» vs «settlement-выплата
+ * на границе интервала» — по значению `fundingRate`/`ts` в уже существующем типе, не по форме
+ * события: заводить здесь новый value-тип означало бы проектировать его заново, а задача просит
+ * ровно `FundingReading` из `market-tape.js`.
+ */
+export interface MarketFundingObservedEvent {
+  readonly kind: 'market.funding.observed';
+  readonly funding: ObservedValue<FundingReading>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Статус подписки — ОДНО генерическое событие, не `market.<kind>.gap_started` на каждый вид.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Вид уже однозначно определён `subscriptionId` (один binding + один datasetId на подписку,
+// §3.1) — per-kind форма (`market.candle.gap_started`, `market.funding.gap_started`, …) множила
+// бы замкнутый union на размер каталога рыночных kind'ов и требовала бы bump'а контракта на
+// КАЖДЫЙ новый вид данных, хотя переход `observed → gap` значит одно и то же для всех пяти.
+//
+// Эмитится РОВНО ОДИН РАЗ на самом переходе: повторов на каждый последующий пустой frontier нет
+// (иначе актор получал бы шум на каждом тике без наблюдения, а не сигнал об изменении). Возврата
+// `gap → observed` как отдельного события НЕТ — само появление следующего рыночного события
+// того же `subscriptionId` УЖЕ сигнализирует возврат; симметричное «gap ended» дублировало бы
+// информацию, которую поток несёт и так.
+//
+// Форма статуса — МИНИМАЛЬНАЯ: только `'gap'`. Полный union `ObservationStatus` вводит задача 4;
+// здесь его решение не предвосхищается — состав мог бы оказаться другим.
+/**
+ * Изменение статуса подписки на `'gap'`. `expectedTsUs` — первая ожидаемая, но не пришедшая
+ * точка (frontier, на котором обнаружен пропуск), не момент детекции (тот — `eventTsUs`
+ * конверта).
+ */
+export interface MarketSubscriptionStatusChangedEvent {
+  readonly kind: 'market.subscription.status_changed';
+  readonly status: 'gap';
+  readonly expectedTsUs: TimestampUs;
+}
+
+// Шов на будущее (НЕ реализовывать здесь): `market.trade` / `market.quote` / `market.book.*`
+// добавляются расширением этого замкнутого union'а — bump контракта, но не перепроектирование
+// рантайма (диспетчер уже переключает по `kind` через `switch`+`assertNever`, новый `case` —
+// локальное изменение). Форм этих событий эта задача не проектирует.
 
 /** Заявка принята средой (venue/симулятором). */
 export interface ActorOrderAcceptedEvent {
@@ -271,7 +308,12 @@ export interface ActorTimerEvent {
 
 /** Замкнутый union входных событий актора. */
 export type ActorInputEvent =
-  | ActorBarEvent
+  | MarketCandleClosedEvent
+  | MarketOpenInterestObservedEvent
+  | MarketLiquidationsBucketClosedEvent
+  | MarketTakerVolumeBucketClosedEvent
+  | MarketFundingObservedEvent
+  | MarketSubscriptionStatusChangedEvent
   | ActorOrderAcceptedEvent
   | ActorOrderDeniedEvent
   | ActorOrderRejectedEvent
@@ -282,7 +324,12 @@ export type ActorInputEvent =
 
 /** Все виды входных событий (для проверок полноты диспетчера). */
 export const ACTOR_INPUT_EVENT_KINDS = [
-  'bar',
+  'market.candle.closed',
+  'market.open_interest.observed',
+  'market.liquidations.bucket_closed',
+  'market.taker_volume.bucket_closed',
+  'market.funding.observed',
+  'market.subscription.status_changed',
   'order.accepted',
   'order.denied',
   'order.rejected',
@@ -431,15 +478,18 @@ export type ActorCommandBatch = readonly ActorCommand[];
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Read-only контекст актора. Реконструируется шимом внутри изолята из конверта события —
- * как 017-`StrategyContext` сегодня. `clock.now()` = `ts` события, `rng` — от seed прогона
- * (CH-5): ambient-времени и неуправляемой случайности у актора нет физически.
+ * Read-only контекст актора — МИНИМАЛЬНАЯ форма на эту задачу (S1/задача 2).
+ *
+ * Заведена как заглушка ИМЕННО под задачу 5: без неё `StrategyActor`/`ActorHandlers` перестали
+ * бы типизироваться после сноса старой формы (`ctx.orders.open()`/`ctx.position()`, реконструкция
+ * шимом из конверта события). Состав `orders()`/`position()` здесь НЕ угадывается — pull-модель
+ * ctx (composition-following, инвариант state-before-handler) спроектирует задача 5 отдельно.
+ * `clock.nowUs()`/`rng.next()` — минимум, без которого не типизируется вообще ничего: без
+ * детерминированных часов и RNG хендлер не может быть детерминированным по определению (CH-5).
  */
 export interface ActorContext {
-  readonly clock: { now(): number };
+  readonly clock: { nowUs(): TimestampUs };
   readonly rng: { next(): number };
-  readonly orders: { open(): readonly OpenOrderView[] };
-  position(): PositionView | null;
 }
 
 /**
@@ -476,7 +526,24 @@ export type ActorHandlerResult = readonly ActorCommand[] | ActorCommand | null |
  * что валидно (и полезно как заглушка).
  */
 export interface ActorHandlers {
-  onBar?(event: ActorBarEvent, ctx: ActorContext): ActorHandlerResult;
+  onMarketCandleClosed?(event: MarketCandleClosedEvent, ctx: ActorContext): ActorHandlerResult;
+  onMarketOpenInterestObserved?(
+    event: MarketOpenInterestObservedEvent,
+    ctx: ActorContext,
+  ): ActorHandlerResult;
+  onMarketLiquidationsBucketClosed?(
+    event: MarketLiquidationsBucketClosedEvent,
+    ctx: ActorContext,
+  ): ActorHandlerResult;
+  onMarketTakerVolumeBucketClosed?(
+    event: MarketTakerVolumeBucketClosedEvent,
+    ctx: ActorContext,
+  ): ActorHandlerResult;
+  onMarketFundingObserved?(event: MarketFundingObservedEvent, ctx: ActorContext): ActorHandlerResult;
+  onMarketSubscriptionStatusChanged?(
+    event: MarketSubscriptionStatusChangedEvent,
+    ctx: ActorContext,
+  ): ActorHandlerResult;
   onOrderAccepted?(event: ActorOrderAcceptedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderDenied?(event: ActorOrderDeniedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderRejected?(event: ActorOrderRejectedEvent, ctx: ActorContext): ActorHandlerResult;
@@ -507,8 +574,35 @@ export function defineActor(handlers: ActorHandlers): StrategyActor {
   return {
     onEvent(event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[] {
       switch (event.kind) {
-        case 'bar':
-          if (handlers.onBar) return toBatch(handlers.onBar(event, ctx));
+        case 'market.candle.closed':
+          if (handlers.onMarketCandleClosed) {
+            return toBatch(handlers.onMarketCandleClosed(event, ctx));
+          }
+          break;
+        case 'market.open_interest.observed':
+          if (handlers.onMarketOpenInterestObserved) {
+            return toBatch(handlers.onMarketOpenInterestObserved(event, ctx));
+          }
+          break;
+        case 'market.liquidations.bucket_closed':
+          if (handlers.onMarketLiquidationsBucketClosed) {
+            return toBatch(handlers.onMarketLiquidationsBucketClosed(event, ctx));
+          }
+          break;
+        case 'market.taker_volume.bucket_closed':
+          if (handlers.onMarketTakerVolumeBucketClosed) {
+            return toBatch(handlers.onMarketTakerVolumeBucketClosed(event, ctx));
+          }
+          break;
+        case 'market.funding.observed':
+          if (handlers.onMarketFundingObserved) {
+            return toBatch(handlers.onMarketFundingObserved(event, ctx));
+          }
+          break;
+        case 'market.subscription.status_changed':
+          if (handlers.onMarketSubscriptionStatusChanged) {
+            return toBatch(handlers.onMarketSubscriptionStatusChanged(event, ctx));
+          }
           break;
         case 'order.accepted':
           if (handlers.onOrderAccepted) return toBatch(handlers.onOrderAccepted(event, ctx));
