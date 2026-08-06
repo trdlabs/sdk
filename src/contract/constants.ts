@@ -12,17 +12,17 @@ export const CONTRACT_VERSION = '017.3' as const;
 export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3'] as const;
 
 /**
- * @deprecated Legacy-каталог (research 023/027/028): camelCase, четыре вида, свечей нет. Это
- * набор ДЛЯ `DataNeedsDeclaration` — булевых flag'ов point-in-time потребностей манифестов
- * `017.1`–`017.3`, а НЕ каталог видов `MarketDataRequirement` (083 S1 задача 3, `event_driven`).
+ * @deprecated Для нового авторства не использовать — см. `MARKET_DATA_KINDS` ниже
+ * (`MarketDataRequirement`, форма `event_driven`, 083 S1 задача 3).
  *
- * Эта КОПИЯ здесь — только реэкспорт наружу (`src/index.ts`); валидацию `unsupported_market_data_kind`
- * фактически ведёт ОТДЕЛЬНАЯ, независимо объявленная копия того же массива в
- * `research-contract/catalogs.ts` (через `platformContractContext().supportedMarketDataKinds` →
- * `validate-module.ts`) — доверять этому файлу как источнику поведения валидатора неверно (раунд
- * правок 1 ошибочно сделал именно это; исправлено). Имя `SUPPORTED_MARKET_DATA_KINDS` сохранено
- * байт-в-байт в ОБЕИХ копиях — удалять нельзя, но оно больше НЕ единственный источник истины о
- * «видах рыночных данных» в этом пакете. Новый каталог — `MARKET_DATA_KINDS` ниже.
+ * Эта КОПИЯ — только реэкспорт значения наружу (`src/index.ts`); поведение валидатора она НЕ
+ * определяет. Действующий экземпляр, который `platformContractContext().supportedMarketDataKinds`
+ * реально передаёт в `validate-module.ts` для проверки `unsupported_market_data_kind` (легаси
+ * `DataNeedsDeclaration`-флаги манифестов `017.1`–`017.3`), — отдельно объявленная копия в
+ * `research-contract/catalogs.ts::SUPPORTED_MARKET_DATA_KINDS`; тег `@deprecated` там несёт то же
+ * значение («не для нового кода», НЕ «сломано» — этот механизм остаётся действующим, пока
+ * `017.1`–`017.3` валидны) и разбирает оба смысла подробно. Имя `SUPPORTED_MARKET_DATA_KINDS`
+ * сохранено байт-в-байт в ОБЕИХ копиях — удалять нельзя.
  */
 export const SUPPORTED_MARKET_DATA_KINDS = [
   'openInterest',

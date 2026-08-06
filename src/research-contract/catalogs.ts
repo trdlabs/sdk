@@ -31,19 +31,29 @@ export const FORBIDDEN_CAPABILITIES = [
 export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3'] as const;
 
 /**
- * 023 — замкнутый каталог поддержанных point-in-time рыночных kind'ов (research R4/R5). Объявленный
- * `dataNeeds`-флаг вне объединения этого каталога со structural/lookahead/nondeterminism-наборами →
- * `unsupported_market_data_kind`. Аналог `METRIC_CATALOG`/`unknown_metric`.
+ * @deprecated ДЛЯ НОВОГО АВТОРСТВА: не использовать. Новый код, объявляющий рыночные данные формы
+ * `event_driven`, берёт закрытый каталог `MARKET_DATA_KINDS`/`MarketDataKind`
+ * (`contract/constants.ts`, экспортирован также из `research-contract/index.ts`) и поле
+ * `ModuleManifest.marketData` — snake_case, пять видов, 083 S1 задача 3.
  *
- * ЭТО активная копия: именно она (через `platformContractContext().supportedMarketDataKinds`)
- * реально ведёт проверку `unsupported_market_data_kind` в `validate-module.ts` — доказано
- * ошибкой раунда правок 1 (м-4): `@deprecated`-пометка тогда легла на близнеца в
- * `contract/constants.ts`, который только РЕЭКСПОРТИРУЕТСЯ наружу (`src/index.ts`) и валидацию не
- * ведёт. `MarketDataKind`/`MARKET_DATA_KINDS` (contract/constants.ts) — ДРУГОЙ, snake_case,
- * пятизначный каталог для `MarketDataRequirement` (083 S1 задача 3, форма `event_driven`); эта
- * camelCase-четвёрка с ним никак не связана и не заменяется им — обслуживает легаси
- * `DataNeedsDeclaration`-флаги манифестов `017.1`–`017.3`, где остаётся действующим механизмом,
- * не устаревшим.
+ * ДЛЯ СУЩЕСТВУЮЩЕГО АВТОРСТВА: `@deprecated` здесь не означает «сломано» и не означает «вторая,
+ * неактуальная копия». ЭТО АКТИВНАЯ, ЕДИНСТВЕННО РАБОЧАЯ копия: именно она (через
+ * `platformContractContext().supportedMarketDataKinds`) реально ведёт проверку
+ * `unsupported_market_data_kind` для легаси-флагов `DataNeedsDeclaration` манифестов `017.1`–
+ * `017.3` (023 — замкнутый каталог поддержанных point-in-time рыночных kind'ов, research R4/R5;
+ * объявленный `dataNeeds`-флаг вне объединения этого каталога со structural/lookahead/
+ * nondeterminism-наборами → `unsupported_market_data_kind`; аналог `METRIC_CATALOG`/
+ * `unknown_metric`). Манифесты `017.1`–`017.3` остаются валидными контрактом (`SUPPORTED_CONTRACT_
+ * VERSIONS`), а значит этот каталог остаётся ДЕЙСТВУЮЩИМ механизмом их валидации — удалению не
+ * подлежит, пока `dataNeeds` жив в схеме.
+ *
+ * Раунд правок 3 (задача 3, м-4 продолжение): владелец уточнил формулировку раунда 2 — тег нужен в
+ * его ТОЧНОМ значении «не для нового авторства, поддержка сохраняется», а не «сломано». Прежняя
+ * формулировка раунда 2 намеренно НЕ несла тег здесь (боясь, что он прочитается как «выбросить»);
+ * итог оказался несогласованным: тег висел на копии в `contract/constants.ts`, которая валидацию
+ * не ведёт вовсе, и молчал на этой, действующей. Инструмент, читающий `@deprecated` (IDE/линтер),
+ * подсвечивал нерелевантное место и молчал на релевантном — исправлено переносом тега сюда с
+ * точной формулировкой обоих значений сразу.
  */
 export const SUPPORTED_MARKET_DATA_KINDS = [
   'openInterest',
