@@ -10,6 +10,7 @@ import {
   DEFAULT_STRATEGY_LIFECYCLE,
   EVENT_DRIVEN_HOOKS,
   EVENT_DRIVEN_MIN_CONTRACT_VERSION,
+  LIFECYCLE_FIELD_MIN_CONTRACT_VERSION,
   STRATEGY_LIFECYCLES,
   type StrategyLifecycle,
 } from '../research-contract/event-driven.js';
@@ -290,6 +291,17 @@ function validateSampleDecisions(
  *
  * `SUPPORTED_CONTRACT_VERSIONS` — возрастающий список, поэтому «не старше» проверяется позицией в
  * нём, без semver-парсера. Версия вне набора уже отклонена шагом 2 — здесь не дублируем.
+ *
+ * **ДВА порога, не один** (задача 6, ревью раунда 1, I-1, Important — исправлена регрессия
+ * первой версии задачи 6, где явный `lifecycle: 'single_position'` под `017.3` ошибочно требовал
+ * `017.4`). `lifecycle === 'event_driven'` (или `onEvent`/`marketData`/`warmup`) — ПЕРЕПИСАННЫЙ
+ * задачами 1–5 surface, порог `EVENT_DRIVEN_MIN_CONTRACT_VERSION` (`017.4`). Голое присутствие
+ * поля `lifecycle` (ЛЮБОЕ значение, включая `single_position`) — исходный E1-словарь `0.13.0`,
+ * которого S1 не касался, порог `LIFECYCLE_FIELD_MIN_CONTRACT_VERSION` (`017.3`, ниже
+ * `EVENT_DRIVEN_MIN_CONTRACT_VERSION`). Смешивание этих порогов в одном предикате — ровно тот
+ * дефект, который поймало ревью: `single_position`, явно объявленный автором, не использует НИ
+ * ОДНОГО бита переписанного surface, и требовать от него `017.4` значило бы наказывать форму,
+ * которую S1 не трогал вовсе.
  */
 function validateSurfaceContractVersion(
   manifest: ModuleManifest,
@@ -297,23 +309,32 @@ function validateSurfaceContractVersion(
   ctx: ContractContext,
   issues: ValidationIssue[],
 ): void {
-  // К-1 (раунд правок 2, Critical, задача 3): `marketData` — ТОЖЕ часть surface актора и обязана
-  // ограждаться версией на равных с `lifecycle`/`onEvent`; без этого пункта манифест 017.1 с
-  // `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём issues — ровно тот случай,
-  // который делает bump версии чисто декларативным (комментарий у `EVENT_DRIVEN_MIN_CONTRACT_
-  // VERSION`, event-driven.ts).
+  // К-1 (раунд правок 2, Critical, задача 3): `marketData` — ТОЖЕ часть ПЕРЕПИСАННОГО surface
+  // актора и обязана ограждаться версией на равных с `lifecycle: 'event_driven'`/`onEvent`; без
+  // этого пункта манифест 017.1 с `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём
+  // issues — ровно тот случай, который делает bump версии чисто декларативным (комментарий у
+  // `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
   //
   // `warmup` (задача 6, долг задачи 3 — тот же класс дыры, что К-1 закрывала для `marketData`):
   // поле заведено задачей 3 (`ModuleManifest.warmup?: ActorWarmupSource`), но НЕ было включено в
   // этот гейт до задачи 6 — манифест 017.1/017.2 с `warmup` без `lifecycle`/`marketData` проходил
   // бы версионный гейт молча. `warmup` осмыслен ТОЛЬКО для формы `event_driven` (прогрев готовит
   // актора к первому торгующему событию), значит принадлежит тому же surface и тому же гейту.
-  const usesEventDrivenSurface =
-    manifest.lifecycle !== undefined ||
+  //
+  // `manifest.lifecycle === 'event_driven'`, НЕ `!== undefined` (I-1): явный `single_position` —
+  // дефолтная форма, не тронутая S1, и живёт под НИЖНИМ порогом `declaresLifecycleField` ниже.
+  const usesRewrittenActorSurface =
+    manifest.lifecycle === 'event_driven' ||
     hooks.includes('onEvent') ||
     manifest.marketData !== undefined ||
     manifest.warmup !== undefined;
-  if (!usesEventDrivenSurface) return;
+
+  // Голое присутствие поля `lifecycle` — ЛЮБОЕ значение, включая мусорное (схема ловит это
+  // отдельно, `schema_invalid`) — уже surface исходного E1-словаря (`017.3`), даже когда значение
+  // не `event_driven`.
+  const declaresLifecycleField = manifest.lifecycle !== undefined;
+
+  if (!usesRewrittenActorSurface && !declaresLifecycleField) return;
 
   const declared: unknown = manifest.contractVersion;
   if (typeof declared !== 'string') return;
@@ -321,14 +342,20 @@ function validateSurfaceContractVersion(
   const declaredIdx = supported.indexOf(declared);
   if (declaredIdx < 0) return; // версия вне набора — причина уже выставлена
 
-  const introducedIdx = supported.indexOf(EVENT_DRIVEN_MIN_CONTRACT_VERSION);
+  const requiredVersion = usesRewrittenActorSurface
+    ? EVENT_DRIVEN_MIN_CONTRACT_VERSION
+    : LIFECYCLE_FIELD_MIN_CONTRACT_VERSION;
+  const introducedIdx = supported.indexOf(requiredVersion);
   if (introducedIdx >= 0 && declaredIdx >= introducedIdx) return;
 
+  const surfaceLabel = usesRewrittenActorSurface
+    ? 'event_driven (lifecycle: event_driven/onEvent/marketData/warmup)'
+    : 'lifecycle (конверт манифеста 083 E1)';
   issues.push(
     makeIssue(
       'unsupported_contract_version',
-      `surface event_driven (lifecycle/onEvent/marketData/warmup) требует contractVersion ` +
-        `≥"${EVENT_DRIVEN_MIN_CONTRACT_VERSION}"; манифест объявляет "${declared}"`,
+      `surface ${surfaceLabel} требует contractVersion ≥"${requiredVersion}"; манифест объявляет ` +
+        `"${declared}"`,
       '/contractVersion',
     ),
   );

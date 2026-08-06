@@ -19,9 +19,11 @@ Rewrites the `event_driven` kernel contract E1 that shipped in `0.13.0` under `C
 017.3`. Scope stays SDK-only per the S1 plan: types, constants and the manifest validator — no
 runtime in any repo is touched (the isolate dispatch boundary, the engine and RiskEngine stay S2/S3
 behind the epic's return trigger). `CONTRACT_VERSION` moves `017.3` → `017.4`; `017.1`–`017.3`
-manifests keep validating for the default `single_position` shape, but the actor surface now
-requires `017.4` — see the note under Changed for why `017.3`, which originally introduced this
-surface, no longer covers it.
+manifests keep validating for the default `single_position` shape (including one that names it
+explicitly, `lifecycle: 'single_position'` — that declaration is untouched by S1 and still only
+needs `017.3`, the version that introduced the `lifecycle` field itself). What actually requires
+`017.4` is `lifecycle: 'event_driven'` specifically, or `onEvent`/`marketData`/`warmup` — see the
+note under Changed for why `017.3`, which originally introduced that surface, no longer covers it.
 
 > **This release removes five exports that shipped in `@trdlabs/sdk@0.13.0`.** `OpenOrderStatus`,
 > `OpenOrderView`, `PositionView`, `FlatMarketSlice` and `ActorBarEvent` are gone. Three of the five
@@ -145,17 +147,22 @@ surface, no longer covers it.
 - `research-contract` / `contract`: `CONTRACT_VERSION` `017.3` → `017.4`; `SUPPORTED_CONTRACT_
   VERSIONS` appends `017.4` (both the published root copy in `contract/constants.ts` and the active
   copy in `research-contract/catalogs.ts` that `platformContractContext()` actually validates
-  against — kept in lockstep). `017.1`–`017.3` manifests keep validating for the `single_position`
-  default shape. **The actor surface (`lifecycle` / `onEvent` / `marketData` / `warmup`) now
-  requires `017.4`** — a manifest declaring any of these under `017.3` is REJECTED
+  against — kept in lockstep). **Two distinct thresholds, not one** (a first draft of this release
+  collapsed them into one and was caught by review before landing — see below): the `lifecycle`
+  field's mere presence (any value, including an explicit `lifecycle: 'single_position'`, the same
+  form as the default per SC-008) is the original E1 vocabulary from `0.13.0` and still only needs
+  `017.3`; **`lifecycle: 'event_driven'` specifically, or `onEvent`/`marketData`/`warmup`, now
+  require `017.4`** — a manifest declaring any of those under `017.3` is REJECTED
   (`unsupported_contract_version`), even though `017.3` is the version that originally introduced
-  this surface in `0.13.0`. This is not a formality: tasks 1–5 rewrote the surface `017.3` promised
+  the `event_driven` surface in `0.13.0`. This is not a formality: tasks 1–5 rewrote that surface
   in its entirety (µs types replacing ms, `OpenOrderView`/`PositionView` redesigned, the authored
   state slot and its generic added, `ActorBarEvent` removed) rather than extending it additively —
-  `017.3` no longer describes a shape this package can produce, so a manifest declaring the new
-  surface under `017.3` is declaring a contract this package does not honor. `warmup` is folded into
-  this gate for the first time in this release (it existed as a field since task 3 but was not yet
-  version-gated — the same class of gap `marketData`'s version gate closed earlier in S1).
+  `017.3` no longer describes a shape this package can produce, so a manifest declaring the
+  rewritten surface under `017.3` is declaring a contract this package does not honor. `warmup` is
+  folded into the `017.4` gate for the first time in this release (it existed as a field since task
+  3 but was not yet version-gated — the same class of gap the `marketData` version gate closed
+  earlier in S1). New exported constant: `LIFECYCLE_FIELD_MIN_CONTRACT_VERSION` (`017.3`), alongside
+  the existing `EVENT_DRIVEN_MIN_CONTRACT_VERSION` (now `017.4`) — `research-contract/event-driven.ts`.
 - `research-contract`: `ActorTimerSetAfterCommand.afterMs: number` → `afterUs: DurationUs`; every
   `ts` / `atTs` / `createdTs` on the actor surface moves from `number` (implicitly milliseconds) to
   `TimestampUs` / `DurationUs` (µs, the sole internal unit `§3.2` of the actor spec requires) so

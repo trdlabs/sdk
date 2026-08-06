@@ -267,6 +267,11 @@ test('ActorBudgets: per-session бюджета НЕТ в форме (excess-prop
   // бесконечна по построению (см. doc ActorBudgets, event-driven.ts) — F6 (backtester sandbox
   // timeout diagnosis) был ровно исчерпанием session-бюджета изолята на долгоживущем акторе,
   // механизм для одноразового скрипта на нём деградирует в гарантированный отказ.
+  //
+  // Minor (ревью раунда 1 задачи 6): `maxWallMs` здесь — НЕ опечатка µs-контракта. Литерал
+  // сознательно зеркалит имя РЕАЛЬНОГО отклонённого поля из F6 (`wallTimeMsPerSession`, мс) —
+  // именно ТАКАЯ форма и есть то, чему в `ActorBudgets` нет места; писать её в µs
+  // (`maxWallUs`) стёрло бы связь с историческим инцидентом, который эта форма отвергает.
   const withSession: ActorBudgets = {
     perDispatch: {},
     perFrontier: { maxCascadeDepth: 1, maxEventsPerFrontier: 1 },
@@ -324,6 +329,15 @@ test('MARKET_DATA_KINDS достижим и идентичен из обеих �
   assert.deepEqual([...MARKET_DATA_KINDS_ROOT], [...MARKET_DATA_KINDS]);
 });
 
-test('EVENT_DRIVEN_MIN_CONTRACT_VERSION совпадает с CONTRACT_VERSION (новый surface вводится ТЕКУЩЕЙ версией)', () => {
-  assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, CONTRACT_VERSION);
+// Minor (ревью раунда 1 задачи 6): было `assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION,
+// CONTRACT_VERSION)` — кодировало «surface актора ВСЕГДА вводится ТЕКУЩЕЙ версией», случайный
+// инвариант этой задачи, а не требование контракта. Следующий несвязанный бамп CONTRACT_VERSION
+// (не трогающий surface event_driven) сделал бы этот тест красным на ровном месте. Опечатку в
+// самом пороге (например, `'017.5'` вместо `'017.4'`) ловит членство в SUPPORTED_CONTRACT_VERSIONS
+// — та же гарантия, но без ложной связи с CONTRACT_VERSION.
+test('EVENT_DRIVEN_MIN_CONTRACT_VERSION — валидный член SUPPORTED_CONTRACT_VERSIONS (не опечатка в пороге)', () => {
+  assert.ok(
+    (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(EVENT_DRIVEN_MIN_CONTRACT_VERSION),
+    `EVENT_DRIVEN_MIN_CONTRACT_VERSION="${EVENT_DRIVEN_MIN_CONTRACT_VERSION}" отсутствует в SUPPORTED_CONTRACT_VERSIONS`,
+  );
 });

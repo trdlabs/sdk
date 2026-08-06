@@ -14,6 +14,7 @@ import {
   DEFAULT_STRATEGY_LIFECYCLE,
   EVENT_DRIVEN_HOOKS,
   EVENT_DRIVEN_MIN_CONTRACT_VERSION,
+  LIFECYCLE_FIELD_MIN_CONTRACT_VERSION,
   STRATEGY_LIFECYCLES,
   SUPPORTED_CONTRACT_VERSIONS,
   defineActor,
@@ -111,14 +112,15 @@ test('манифесты прежних версий контракта оста
 
 // --- версия контракта ограждает новый surface ---
 
-// 083 S1 задача 6: бамп подвинул порог с 017.3 на 017.4 — 017.3, введший исходный E1-surface,
-// больше его не покрывает (тот surface переписан целиком, см. doc EVENT_DRIVEN_MIN_CONTRACT_VERSION).
-test('surface актора требует ≥017.4; 017.1–017.3 отвергают его, включая 017.3, введший исходный E1', () => {
+// 083 S1 задача 6: бамп подвинул порог ПЕРЕПИСАННОГО surface с 017.3 на 017.4 — 017.3, введший
+// исходный E1-surface, больше его не покрывает (тот surface переписан целиком, см. doc
+// EVENT_DRIVEN_MIN_CONTRACT_VERSION). Явный `lifecycle: 'single_position'` сюда НЕ входит — он
+// живёт под отдельным, более низким порогом (см. следующий тест, I-1).
+test('surface event_driven (lifecycle: event_driven/onEvent/marketData/warmup) требует >=017.4; 017.1-017.3 отвергают его', () => {
   assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, '017.4');
-  for (const contractVersion of ['017.1', '017.2', '017.3']) {
+  for (const contractVersion of ['017.1', '017.2', '017.3'] as const) {
     for (const [label, manifest] of [
       ['lifecycle: event_driven', { ...ACTOR, contractVersion }],
-      ['lifecycle: single_position', { ...BASE, lifecycle: 'single_position' as const, contractVersion }],
       ['хук onEvent', { ...ACTOR, lifecycle: undefined, contractVersion }],
     ] as const) {
       const res = check(manifest);
@@ -129,6 +131,27 @@ test('surface актора требует ≥017.4; 017.1–017.3 отверга
       );
     }
   }
+});
+
+// I-1 (ревью раунда 1 задачи 6, Important - исправлена регрессия). Явный `lifecycle:
+// 'single_position'` - та же форма, что и дефолт (SC-008), НЕ переписанный surface `event_driven`:
+// требует лишь `LIFECYCLE_FIELD_MIN_CONTRACT_VERSION` (017.3, порог самого поля `lifecycle`,
+// введённого 083 E1 в 0.13.0), а не `EVENT_DRIVEN_MIN_CONTRACT_VERSION` (017.4). Первая версия
+// задачи 6 гейтила ЛЮБОЕ значение поля `lifecycle` порогом 017.4 - доказано сборкой на двух
+// коммитах: один и тот же манифест был `accepted` на базе задачи 5 и `rejected` после первой
+// версии задачи 6 (см. doc `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
+test('lifecycle: single_position требует лишь >=017.3 (поле, не переписанный surface) - 017.3 принимается', () => {
+  assert.equal(LIFECYCLE_FIELD_MIN_CONTRACT_VERSION, '017.3');
+  for (const contractVersion of ['017.1', '017.2'] as const) {
+    const res = check({ ...BASE, lifecycle: 'single_position' as const, contractVersion });
+    assert.equal(res.status, 'rejected', contractVersion);
+    assert.ok(
+      res.issues.some((i) => i.code === 'unsupported_contract_version' && i.path === '/contractVersion'),
+      `${contractVersion}: причина должна указывать на версию`,
+    );
+  }
+  const accepted = check({ ...BASE, lifecycle: 'single_position' as const, contractVersion: '017.3' });
+  assert.equal(accepted.status, 'accepted', JSON.stringify(accepted.issues));
 });
 
 test('под 017.4 тот же surface принимается', () => {
@@ -147,10 +170,10 @@ test('дефолтная форма — single_position', () => {
 });
 
 test('явный single_position эквивалентен отсутствию поля, но попадает в проекцию', () => {
-  // Явное поле `lifecycle` — уже surface (см. цикл выше, вариант «lifecycle: single_position»
-  // среди отвергаемых под старыми версиями), поэтому нужна версия ≥017.4, даже хотя значение —
-  // дефолтная форма.
-  const res = check({ ...BASE, contractVersion: '017.4', lifecycle: 'single_position' });
+  // I-1 (задача 6): явное поле `lifecycle` — surface исходного E1-словаря (017.3), НЕ
+  // переписанный surface `event_driven` (017.4) — BASE.contractVersion (017.3) уже достаточен,
+  // override не нужен.
+  const res = check({ ...BASE, lifecycle: 'single_position' });
   assert.equal(res.status, 'accepted');
   assert.equal((res.normalized as { lifecycle?: string }).lifecycle, 'single_position');
 });
@@ -205,9 +228,10 @@ test('overlay не может объявить форму актора', () => {
 });
 
 test('неизвестная форма — schema_invalid по enum, без причин о наборе хуков', () => {
-  // Поле lifecycle присутствует (хотя бы и с мусорным значением) — уже surface, версия ≥017.4
-  // нужна, чтобы изолировать код именно schema_invalid.
-  const codes = codesOf({ ...BASE, contractVersion: '017.4', lifecycle: 'multi_position' as never });
+  // I-1 (задача 6): поле lifecycle присутствует (хотя бы и с мусорным значением), но это НЕ
+  // 'event_driven' — гейтится порогом 017.3 (LIFECYCLE_FIELD_MIN_CONTRACT_VERSION), которому
+  // BASE.contractVersion уже удовлетворяет; override не нужен.
+  const codes = codesOf({ ...BASE, lifecycle: 'multi_position' as never });
   assert.deepEqual(codes, ['schema_invalid']);
 });
 
