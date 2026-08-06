@@ -831,6 +831,20 @@ export type ActorWarmupSource = { readonly kind: 'tape_replay' } | { readonly ki
  * `NaN`/`Infinity` не входят (типовое ограничение `number` их не исключает, но `isPlainActorState`
  * отклоняет их рантаймом — та же дисциплина, что `isTimestampUs`/`isDurationUs` в `time-us.ts`:
  * тип называет НАМЕРЕНИЕ, рантайм-предикат его проверяет на недоверенном значении).
+ *
+ * **Своя форма состояния (`StrategyActor<S>`/`ActorInit<S>`) — `type`-псевдоним, НЕ `interface`**
+ * (Minor, ревью раунда 3, I-3.2): `type MyState = { readonly counter: number }` удовлетворяет
+ * `S extends ActorStateValue` без ничего лишнего, а структурно ИДЕНТИЧНЫЙ `interface MyState {
+ * readonly counter: number }` — НЕТ (`TS2344: Index signature for type 'string' is missing`,
+ * известное расхождение TS: object-type-псевдонимам компилятор выводит неявную индексную сигнатуру
+ * в позиции generic-ограничения, именованным `interface` — нет, они номинальны). Если `interface`
+ * необходим (например, чтобы состояние расширяли другие `interface`), добавьте индексную сигнатуру
+ * явно: `interface MyState { readonly [key: string]: ActorStateValue; readonly counter: number }`
+ * — но учтите цену: индексная сигнатура делает форму ОТКРЫТОЙ (`{counter: 1, anythingElse: 2}`
+ * тоже пройдёт структурную проверку `S`), тогда как `type`-псевдоним без нужды в ней остаётся
+ * ЗАКРЫТЫМ (лишний ключ на объекте, ЛИТЕРАЛЬНО присвоенном переменной этого типа, поймает excess-
+ * property check). Естественная авторская форма (`interface` без индексной сигнатуры) падает с
+ * TS2344 без объяснения причины в тексте ошибки — теперь она объяснена здесь.
  */
 export type ActorStateValue =
   | null
@@ -907,8 +921,28 @@ const MAX_ACTOR_STATE_DEPTH = 500;
  * множество, `add` перед рекурсией, `delete` в `finally` после (сохраняет корректность на
  * диамантах — тот же узел, встреченный ПОВТОРНО НЕ по кругу, к моменту повторной встречи уже
  * удалён из `ancestors`, потому что первая ветвь успела вернуться).
+ *
+ * `confirmed` — ВТОРОЕ множество, ГЛОБАЛЬНОЕ на весь вызов `isPlainActorState` (НЕ backtracking,
+ * никогда не уменьшается) — memo объектов, для которых обход УЖЕ доказал «весь их поддерево —
+ * plain-data, без цикла» (ревью раунда 3, новый Important: `finally`-очистка `ancestors` даёт
+ * верный O(глубина) на ПОСЕЩЕНИЕ, но число посещений не ограничено числом узлов на DAG'е —
+ * разделяемый ПОДГРАФ (не только лист) обходится заново по КАЖДОМУ пути к нему, `2^глубина` при
+ * ветвлении; прогон ревью — 23 разделяемых объекта дали 4.1 с). Соответствует РЕАЛЬНОЙ угрозе:
+ * `snapshotState()` возвращает внутрипроцессный объект (не результат `JSON.parse`, тот ВСЕГДА
+ * дерево), который волен разделять ссылки свободно — гейт, охраняющий именно ЭТУ границу, обязан
+ * быть безопасен и на DAG, не только на дереве.
+ *
+ * Мемоизация СОХРАНЯЕТ корректность обнаружения циклов: объект добавляется в `confirmed` ТОЛЬКО
+ * ПОСЛЕ того, как его СОБСТВЕННОЕ поддерево полностью пройдено и не породило `false` — то есть
+ * только когда в его поддереве СТРУКТУРНО нет цикла НИ С ОДНИМ узлом (совпадение объекта в
+ * `confirmed` с текущим `ancestors` невозможно: попадание в `confirmed` происходит ПОСЛЕ выхода
+ * из `try`, когда `obj` уже удалён из `ancestors` в `finally`). Ложноположительных «plain-data»
+ * из-за memo быть не может: единственное, что мемоизируется, — уже доказанный факт про САМ объект,
+ * не зависящий от того, ОТКУДА к нему пришли повторно. Ложноотрицательные (мемо `false`) НЕ
+ * делаются намеренно: `false` мог произойти из-за `ancestors.has(obj)` — факта, специфичного для
+ * ТЕКУЩЕГО пути, а не для объекта вообще; тот же объект с ДРУГОГО пути мог бы оказаться валиден.
  */
-function isPlainDataValue(value: unknown, ancestors: Set<object>, depth: number): boolean {
+function isPlainDataValue(value: unknown, ancestors: Set<object>, confirmed: Set<object>, depth: number): boolean {
   if (depth > MAX_ACTOR_STATE_DEPTH) return false; // fail-closed, не падение стека — см. doc выше.
   if (value === null) return true;
   const t = typeof value;
@@ -917,7 +951,11 @@ function isPlainDataValue(value: unknown, ancestors: Set<object>, depth: number)
   // 0` (положительный) — `-0` НЕ переживает границу JSON байт-в-байт, хотя `Number.isFinite(-0)`
   // истинно. Та же дисциплина, что `deepValueEquals` в `observation-status.ts` уже применяет к
   // сравнению (`0` и `-0` — РАЗНЫЕ значения через `Object.is`), только здесь — не сравнение двух
-  // значений, а гарантия «переживёт JSON» одного значения.
+  // значений, а гарантия «переживёт JSON» одного значения. Готча (Minor, ревью раунда 3, одна
+  // строка доки, как и просили): `-0` получается ОБЫЧНОЙ арифметикой, не только литералом —
+  // `0 * -1`, `-1 * 0`, `0 / -1` все дают `-0`; счётчик автора, дошедший до такого выражения,
+  // отклоняется здесь ЦЕЛИКОМ при следующем чекпойнте, если его не нормализовать (`x + 0` перед
+  // снятием состояния превращает `-0` обратно в `+0`).
   if (t === 'number') return Number.isFinite(value as number) && !Object.is(value, -0);
   // function/symbol/bigint/undefined — НЕ plain-data. `undefined` внутри структуры (не как
   // отсутствующий ключ, а как явное значение) тоже отклонён: `JSON.stringify` роняет такие ключи
@@ -925,30 +963,33 @@ function isPlainDataValue(value: unknown, ancestors: Set<object>, depth: number)
   if (t !== 'object') return false;
 
   const obj = value as object;
+  if (confirmed.has(obj)) return true; // уже доказано целиком — см. doc выше.
   if (ancestors.has(obj)) return false; // настоящий цикл — см. doc выше.
   ancestors.add(obj);
+  let ok: boolean;
   try {
     if (Array.isArray(obj)) {
-      if (!hasOnlyPlainArrayKeys(obj)) return false;
-      return obj.every((item) => isPlainDataValue(item, ancestors, depth + 1));
+      ok = hasOnlyPlainArrayKeys(obj) && obj.every((item) => isPlainDataValue(item, ancestors, confirmed, depth + 1));
+    } else {
+      // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
+      // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
+      // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов
+      // (который расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к
+      // двум разрешённым формам прототипа.
+      const proto = Object.getPrototypeOf(obj);
+      ok =
+        (proto === Object.prototype || proto === null) &&
+        hasOnlyPlainOwnKeys(obj) &&
+        Object.values(obj as Record<string, unknown>).every((v) => isPlainDataValue(v, ancestors, confirmed, depth + 1));
     }
-
-    // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
-    // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
-    // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов (который
-    // расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к двум
-    // разрешённым формам прототипа.
-    const proto = Object.getPrototypeOf(obj);
-    if (proto !== Object.prototype && proto !== null) return false;
-    if (!hasOnlyPlainOwnKeys(obj)) return false;
-
-    return Object.values(obj as Record<string, unknown>).every((v) => isPlainDataValue(v, ancestors, depth + 1));
   } finally {
     // ОБЯЗАН выполниться на ВСЕХ путях выхода (включая ранние `return false` выше в блоке) — иначе
     // соседняя ветвь (диамант, не потомок) видит `obj` как предка и ложно отклоняет легитимную
     // разделяемую ссылку.
     ancestors.delete(obj);
   }
+  if (ok) confirmed.add(obj); // мемо ТОЛЬКО положительного исхода — см. doc выше, почему.
+  return ok;
 }
 
 /**
@@ -958,10 +999,13 @@ function isPlainDataValue(value: unknown, ancestors: Set<object>, depth: number)
  * (`Date`/`Map`/`Set`/класс-инстанс), sparse-массивы, добавленные нечисловые свойства массива,
  * вложенность глубже `MAX_ACTOR_STATE_DEPTH` (fail-closed `false`, не исключение). Принимает
  * вложенную структуру из `null`/`boolean`/`string`/конечных `number`/плотных массивов/plain-
- * объектов до предельной глубины (включая разделяемые, не циклические ссылки — диамант).
+ * объектов до предельной глубины, ДЕРЕВОМ либо DAG'ом — разделяемая (не циклическая) ссылка
+ * учитывается ОДИН раз через memo (`confirmed`, ревью раунда 3), а не переисследуется по каждому
+ * пути к ней: стоимость — O(число различных достижимых объектов), а не экспоненциальная от
+ * ветвления путей.
  */
 export function isPlainActorState(value: unknown): value is ActorStateValue {
-  return isPlainDataValue(value, new Set(), 0);
+  return isPlainDataValue(value, new Set(), new Set(), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1079,6 +1123,18 @@ export type OpenOrderView = OpenMarketOrderView | OpenLimitOrderView | OpenStopM
 // добросовестно реализует ctx, но злонамеренно портит уже полученные значения» — не тот класс
 // дефекта, которым была подтверждена находка C-1 раунда 1; там хост НЕ ВЫВОДИЛ вид из журнала
 // вовсе, что бренд и ловит).
+//
+// Тот же остаток названия (Minor, ревью раунда 3): `const p: PositionView = JSON.parse(str)`
+// ТОЖЕ компилируется без единого `as` и без настоящего экземпляра вообще — но не потому, что бренд
+// слаб, а потому, что `JSON.parse` возвращает `any`, а `any` по определению обходит ЛЮБУЮ
+// структурную проверку TS, брендированную или нет (то же самое верно для ЛЮБОГО другого типа в
+// пакете, не только `PositionView`). Это НЕ третий путь обхода бренда — это ОБЩАЯ граница TS
+// (`any`/`unknown` от недоверенного источника), та же самая, ради которой существует
+// `isExecutionLedgerEntry`/`isPlainActorState`: хост, читающий `PositionView`-подобную структуру
+// из строки/сети, обязан ПРОВЕРИТЬ её рантаймом (в этом пакете такого гейта для `PositionView`
+// целиком нет — только для `ExecutionLedger`, из которого `PositionView` ВЫВОДИТСЯ; отдельного
+// runtime-валидатора формы `PositionView` не заведено, потому что единственный легитимный источник
+// `PositionView` в системе — сам `derivePositionView`, а не десериализация чужого JSON).
 declare const POSITION_VIEW_BRAND: unique symbol;
 
 /**
@@ -1170,13 +1226,33 @@ export interface ActorContext {
  * MyState>`, получает несовпадение форм КАК ОШИБКУ КОМПИЛЯЦИИ, а не риск времени исполнения. Дефолт
  * `ActorStateValue` держит НЕпараметризованное использование (как раньше) валидным без изменений.
  *
- * Дважды опциональность (`snapshotState?`/`state?`) ОСТАЁТСЯ и делает НАБЛЮДАЕМОСТЬ потери
- * состояния ГРАНИЦЕЙ ЭТОГО СЛОЯ, не решённой задачей — см. развёрнутый doc у `ActorInit.state`.
+ * `snapshotState` ОБЯЗАТЕЛЕН, когда `S` параметризован КОНКРЕТНЫМ типом уже НЕПОСРЕДСТВЕННО на
+ * этом уровне — не только опечаткой доки, а типовым УСЛОВИЕМ (ревью раунда 3, I-3.3: раунд 2
+ * объявил дважды-опциональность «границей слоя, не решаемой типами» — ревьюер построил и
+ * скомпилировал контрпример, суждение было неверным именно ПОТОМУ, что дженерик уже введён).
+ * `ActorStateValue extends S` истинно ТОЛЬКО когда `S` — сам НЕпараметризованный дефолт
+ * (`ActorStateValue` не ýже никакого своего собственного сужения, кроме себя самого) — тогда
+ * `snapshotState` остаётся `?`, как раньше. Для ЛЮБОГО конкретного сужения (`StrategyActor<Sma>`)
+ * `ActorStateValue extends S` ложно, и ветвь становится `{ snapshotState(): S }` — ОБЯЗАТЕЛЬНЫМ.
+ * Автор, объявивший ТИП своего состояния, но не реализовавший его снятие, теперь получает ошибку
+ * СБОРКИ там, где раньше получал молчаливую потерю на каждом чекпойнте (см. также
+ * `ActorHandlers<S>`/`defineActor`, куда то же условие продолжено, чтобы `defineActor<Sma>({...})`
+ * без `snapshotState` тоже не собиралось).
+ *
+ * Выбор дефолта — `S extends ActorStateValue = ActorStateValue` (не `S = never` с обратным
+ * условием, «нельзя объявить snapshotState без явного `<S>`»): ревьюер проверил и такой вариант —
+ * строже (закрывает СИММЕТРИЧНУЮ дыру «объявил снятие без параметризации типа»), но ценой back-
+ * compat формы «просто передать `snapshotState`, не выписывая `defineActor<MyState>(...)`
+ * отдельно» — вывод `S` из формы `snapshotState` при НЕуказанном явном типовом аргументе менее
+ * надёжен, чем явная параметризация, и для пакета, часть авторов которого — LLM (см. `brief.ts`,
+ * `market-tape.ts` doc про недоверенный/LLM-написанный код), лишний источник запутывающих ошибок
+ * вывода типа — худший компромисс, чем сохранённая, уже проверенная (раунд 2) полная обратная
+ * совместимость. Оставшаяся дыра («хост объявил и снял состояние, но не вернул его при следующем
+ * `createActor`») — РАНТАЙМОВАЯ, не типовая, её ЭТА конструкция не касается (см. `ActorInit.state`).
  */
-export interface StrategyActor<S extends ActorStateValue = ActorStateValue> {
+export type StrategyActor<S extends ActorStateValue = ActorStateValue> = {
   onEvent(event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[];
-  snapshotState?(): S;
-}
+} & (ActorStateValue extends S ? { snapshotState?(): S } : { snapshotState(): S });
 
 /**
  * Разрешённый дескриптор ОДНОЙ подписки актора — элемент `ActorInit.subscriptions` (задача 5,
@@ -1292,7 +1368,7 @@ export type ActorHandlerResult = readonly ActorCommand[] | ActorCommand | null |
  * которой написан нормативный блок `actor-state.ts` про `tp1Done`-подобные флаги (механизм
  * расширили в `StrategyActor`/`ActorInit`, бухгалтерию сахара вокруг него — нет).
  */
-export interface ActorHandlers<S extends ActorStateValue = ActorStateValue> {
+export type ActorHandlers<S extends ActorStateValue = ActorStateValue> = {
   onMarketCandleClosed?(event: MarketCandleClosedEvent, ctx: ActorContext): ActorHandlerResult;
   onMarketOpenInterestObserved?(
     event: MarketOpenInterestObservedEvent,
@@ -1320,10 +1396,16 @@ export interface ActorHandlers<S extends ActorStateValue = ActorStateValue> {
   onTimer?(event: ActorTimerEvent, ctx: ActorContext): ActorHandlerResult;
   /** Catch-all: получает события, для которых нет специфичного хендлера. */
   onEvent?(event: ActorInputEvent, ctx: ActorContext): ActorHandlerResult;
-  /** Снять авторское состояние — см. doc `StrategyActor.snapshotState`. Опционально: стейтлес-актор
-   *  его не объявляет, и `defineActor` тогда НЕ добавляет `snapshotState` в возвращаемый объект. */
-  snapshotState?(): S;
-}
+} & (ActorStateValue extends S
+  ? {
+      /** Снять авторское состояние — см. doc `StrategyActor.snapshotState`. Опционально: стейтлес-
+       *  актор его не объявляет, и `defineActor` тогда НЕ добавляет `snapshotState` в возвращаемый
+       *  объект. ОБЯЗАТЕЛЬНО, когда `defineActor` параметризован конкретным `S` (ревью раунда 3,
+       *  I-3.3) — то же условие, что у `StrategyActor<S>`, продолженное сюда, чтобы
+       *  `defineActor<Sma>({...})` без `snapshotState` тоже не собиралось. */
+      snapshotState?(): S;
+    }
+  : { snapshotState(): S });
 
 /** Нормализовать ответ хендлера к батчу (единственная точка, где `null`/одиночка расширяются). */
 function toBatch(result: ActorHandlerResult): readonly ActorCommand[] {
@@ -1344,6 +1426,15 @@ function toBatch(result: ActorHandlerResult): readonly ActorCommand[] {
  * (ревью раунда 2, I-3, пункт 1) — `Reflect.ownKeys` возвращаемого объекта либо `['onEvent']`,
  * либо `['onEvent', 'snapshotState']`, СИММЕТРИЧНО тому, что автор фактически объявил, а не
  * `['onEvent']` всегда: до этой правки `defineActor` не мог произвести `snapshotState` вовсе.
+ *
+ * `as StrategyActor<S>` на обоих `return` ниже — ЕДИНСТВЕННЫЙ каст функции: `StrategyActor<S>`
+ * (ревью раунда 3, I-3.3) — условный тип (`ActorStateValue extends S ? … : …`), а условные типы,
+ * зависящие от ЕЩЁ НЕ РАЗРЕШЁННОГО дженерик-параметра, TS не «раскрывает» ВНУТРИ тела дженерик-
+ * функции (известное ограничение проверки типов, не специфика этого файла) — снаружи, на стороне
+ * ВЫЗЫВАЮЩЕГО (где `S` уже конкретен), проверка условной ветки работает штатно и ловит несовпадение
+ * (см. тесты). Рантайм-ветвление `if (handlers.snapshotState)` — правильное И полное покрытие обеих
+ * ветвей типа; каст только называет то, что код уже гарантирует, компилятору, который не может
+ * этого вывести сам на этом конкретном шаге.
  */
 export function defineActor<S extends ActorStateValue = ActorStateValue>(
   handlers: ActorHandlers<S>,
@@ -1412,9 +1503,16 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
     return handlers.onEvent ? toBatch(handlers.onEvent(event, ctx)) : [];
   };
 
+  // `() => handlers.snapshotState!()` — НЕ `const f = handlers.snapshotState; () => f()` (ревью
+  // раунда 3, новый Important): извлечение метода в отдельную переменную теряет `this` — все
+  // остальные хендлеры зовутся как `handlers.onX(...)` (this = handlers), а вырванный
+  // `snapshotState` звался бы «голым», `this === undefined` в строгом режиме. Каноническая форма
+  // актора с состоянием (`{ count: 0, onFill() { this.count += 1 }, snapshotState() { return
+  // {count: this.count} } }`) типизировалась и падала `TypeError` РОВНО на той функции, ради
+  // починки которой заведён весь I-3.1. Вызов через `handlers.snapshotState!()` — свойство,
+  // немедленно вызванное — сохраняет `this = handlers`, как у всех остальных вызовов в этом файле.
   if (handlers.snapshotState) {
-    const snapshotState = handlers.snapshotState;
-    return { onEvent, snapshotState: () => snapshotState() };
+    return { onEvent, snapshotState: () => handlers.snapshotState!() } as StrategyActor<S>;
   }
-  return { onEvent };
+  return { onEvent } as StrategyActor<S>;
 }

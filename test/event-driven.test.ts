@@ -272,16 +272,18 @@ test('findDuplicateSubscriptionIds: пусто без дублей, дубль �
 
 // --- state-слот: ActorInit<S>.state / StrategyActor<S>.snapshotState (ревью раунда 1, I-3;
 // раунд 2 — три Important на этой же поверхности: defineActor не мог произвести snapshotState
-// вовсе (пункт 1), снятие/восстановление не были связаны типом (пункт 2, дженерик S), двойная
-// опциональность делает потерю ненаблюдаемой (пункт 3, задокументировано как остаточный риск,
-// не проверяется здесь тестом — см. doc у ActorInit) ---
+// вовсе (пункт 1, ЗАКРЫТО), снятие/восстановление не были связаны типом (пункт 2, дженерик S,
+// ЗАКРЫТО), двойная опциональность делает потерю ненаблюдаемой (пункт 3, раунд 2 объявил границей
+// слоя — ревью раунда 3 построило и скомпилировало контрпример: суждение было неверным именно
+// ПОТОМУ, что дженерик уже введён, см. StrategyActor<S>/ActorHandlers<S>) ---
+
+// I-3.2 (Minor, ревью раунда 3): своя форма `S` — `type`-псевдоним, НЕ `interface` (см. doc
+// `ActorStateValue`, event-driven.ts, откуда взята эта рекомендация дословно) — `interface` без
+// явной индексной сигнатуры не удовлетворяет `S extends ActorStateValue` (TS2344).
+type CounterState = { readonly counter: number };
+type SmaState = { readonly ticks: number; readonly sma: number };
 
 test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять/вернуть при чекпойнте»', () => {
-  interface CounterState {
-    readonly [key: string]: ActorStateValue;
-    readonly counter: number;
-  }
-
   const priorState: CounterState = { counter: 3 };
   assert.ok(isPlainActorState(priorState), 'фикстура сама обязана быть валидным state-слотом');
 
@@ -312,7 +314,7 @@ test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять
   const actor = module.createActor(init);
   assert.deepEqual(capturedInit?.state, priorState);
   actor.onEvent(CANDLE_CLOSED, CTX_STUB);
-  const snapshot = actor.snapshotState?.();
+  const snapshot = actor.snapshotState();
   assert.ok(isPlainActorState(snapshot), 'снятое состояние обязано пройти isPlainActorState на границе хоста');
   assert.deepEqual(snapshot, { counter: 4 });
 
@@ -326,12 +328,6 @@ test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять
 // `S` теперь связывает `StrategyActor<S>.snapshotState(): S` и `ActorInit<S>.state?: S` ОДНИМ
 // параметром типа — несовпадение форм красит СБОРКУ, не рантайм.
 test('I-3 раунд 2, п.2: параметризованные StrategyActor<S>/ActorInit<S> связывают снятие и восстановление типом', () => {
-  interface SmaState {
-    readonly [key: string]: ActorStateValue;
-    readonly ticks: number;
-    readonly sma: number;
-  }
-
   // Совместимая пара — типизируется и работает.
   const compatibleModule: EventDrivenModule<SmaState> = {
     createActor: (init) => ({
@@ -347,7 +343,7 @@ test('I-3 раунд 2, п.2: параметризованные StrategyActor<S
     state: { ticks: 1, sma: 100 },
   };
   const compatibleActor = compatibleModule.createActor(compatibleInit);
-  assert.deepEqual(compatibleActor.snapshotState?.(), { ticks: 2, sma: 100 });
+  assert.deepEqual(compatibleActor.snapshotState(), { ticks: 2, sma: 100 });
 
   // Несовместимая пара — актор снимает SmaState, но объявлен как StrategyActor<string> (голая
   // строка вместо структурированного состояния): раньше (общий ActorStateValue с обеих сторон)
@@ -376,6 +372,80 @@ test('I-3 раунд 2, п.1: defineActor производит snapshotState, к
     'с хендлером — поле присутствует симметрично объявленному',
   );
   assert.deepEqual(stateful.snapshotState?.(), { n: 1 });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// I-3.3 (ревью раунда 3): условный тип делает snapshotState ОБЯЗАТЕЛЬНЫМ, когда S параметризован
+// конкретным сужением — раунд 2 объявил дважды-опциональность «границей слоя, не решаемой типами»;
+// ревьюер построил и скомпилировал контрпример против установленного пакета, суждение было
+// неверным. ActorStateValue extends S истинно ТОЛЬКО когда S — сам дефолт (S = ActorStateValue);
+// для любого конкретного сужения (StrategyActor<Sma>) ветвь становится { snapshotState(): S } —
+// обязательной.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('I-3.3: StrategyActor<S> С конкретным S требует snapshotState — компилируется, когда он есть', () => {
+  const withState: StrategyActor<SmaState> = {
+    onEvent: () => [],
+    snapshotState: () => ({ ticks: 1, sma: 100 }),
+  };
+  assert.deepEqual(withState.snapshotState(), { ticks: 1, sma: 100 });
+});
+
+test('I-3.3: StrategyActor<S> БЕЗ snapshotState — ошибка компиляции (раньше молча терялось состояние)', () => {
+  // @ts-expect-error — StrategyActor<SmaState> ОБЯЗАН нести snapshotState: ActorStateValue extends
+  // SmaState ложно (SmaState — конкретное сужение), ветвь условного типа — { snapshotState(): S }.
+  const missingSnapshot: StrategyActor<SmaState> = { onEvent: () => [] };
+  void missingSnapshot;
+});
+
+test('I-3.3: defineActor<S>(...) БЕЗ handlers.snapshotState — ошибка компиляции (прогон ревью буквально)', () => {
+  // Прогон ревью: `defineActor<Sma>({ onFill: () => [] })` типизировался (актор с рантайм-ownKeys
+  // === ['onEvent']) — автор явно объявил ТИП состояния и получил актора, который его никогда не
+  // снимет. ActorHandlers<S> несёт то же условие, что StrategyActor<S> — теперь это ошибка сборки.
+  // @ts-expect-error — ActorHandlers<SmaState> требует snapshotState(): SmaState.
+  const actor = defineActor<SmaState>({ onFill: () => [] });
+  void actor;
+});
+
+test('I-3.3: EventDrivenModule<S>, возвращающий актора без snapshotState — ошибка компиляции', () => {
+  const badModule: EventDrivenModule<SmaState> = {
+    // @ts-expect-error — StrategyActor<SmaState> (возвращаемый тип createActor) требует
+    // snapshotState; { onEvent } его не несёт.
+    createActor: () => ({ onEvent: () => [] }),
+  };
+  void badModule;
+});
+
+test('I-3.3: непараметризованный StrategyActor (дефолт) остаётся ПОЛНОСТЬЮ обратно совместимым', () => {
+  // Три формы из доки ревью — все компилируются: непараметризованный без состояния,
+  // непараметризованный со snapshotState, явный <ActorStateValue>.
+  const stateless: StrategyActor = { onEvent: () => [] };
+  const stateful: StrategyActor = { onEvent: () => [], snapshotState: () => ({ n: 1 }) };
+  const explicit: StrategyActor<ActorStateValue> = { onEvent: () => [] };
+  assert.equal(stateless.snapshotState, undefined);
+  assert.deepEqual(stateful.snapshotState?.(), { n: 1 });
+  assert.equal(explicit.snapshotState, undefined);
+});
+
+// Новый Important, ревью раунда 3: извлечение `handlers.snapshotState` в переменную перед вызовом
+// теряет `this` — все остальные хендлеры зовутся как `handlers.onX(...)` (this = handlers), а
+// вырванный `snapshotState` звался бы «голым». Каноническая форма актора с состоянием (методы на
+// объекте хендлеров, читающие `this`) типизировалась и падала TypeError.
+test('Новый дефект раунда 3: defineActor сохраняет `this = handlers` при вызове snapshotState', () => {
+  const handlers = {
+    count: 0,
+    onFill(): readonly ActorCommand[] {
+      this.count += 1;
+      return [];
+    },
+    snapshotState(): ActorStateValue {
+      return { count: this.count };
+    },
+  };
+  const actor = defineActor(handlers);
+  actor.onEvent({ kind: 'fill', ts: timestampUs(1), clientOrderId: 'o-1', price: 1, qty: 1, fee: 0, last: true }, CTX_STUB);
+  assert.doesNotThrow(() => actor.snapshotState?.(), 'this внутри snapshotState обязан указывать на handlers');
+  assert.deepEqual(actor.snapshotState?.(), { count: 1 });
 });
 
 // --- OpenOrderView: дискриминированный union по type (ревью раунда 1, I-7); status (I-2) ---

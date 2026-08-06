@@ -199,6 +199,30 @@ test('isPlainActorState: широкий fan-out одной разделяемо�
   assert.equal(isPlainActorState(wide), true);
 });
 
+// Новый Important, ревью раунда 3: `finally`-очистка ancestors даёт верный O(глубина) на
+// ПОСЕЩЕНИЕ, но число посещений не ограничено числом узлов на DAG'е — разделяемый ПОДГРАФ (не
+// только лист) без memo обходится заново по каждому пути к нему, 2^глубина при ветвлении надвое на
+// каждом уровне (прогон ревью: 23 разделяемых объекта → 4.1с). Угроза реальна ИМЕННО здесь:
+// snapshotState() возвращает внутрипроцессный объект, не JSON.parse (тот всегда дерево), и волен
+// разделять ссылки свободно.
+function buildDiamondDag(levels: number): unknown {
+  let node: unknown = { leaf: 1 };
+  for (let i = 0; i < levels; i += 1) node = { left: node, right: node };
+  return node;
+}
+
+test('isPlainActorState: DAG с разделяемыми поддеревьями — O(узлы), не O(2^глубина)', () => {
+  // 50 уровней двоичного ветвления БЕЗ memo — 2^50 узлов, физически недостижимо за разумное время;
+  // прогон ревью зафиксировал экспоненциальный рост уже на 17–23 уровнях (65мс → 4.1с).
+  for (const levels of [23, 30, 50]) {
+    const t0 = performance.now();
+    const result = isPlainActorState(buildDiamondDag(levels));
+    const elapsedMs = performance.now() - t0;
+    assert.equal(result, true, `levels=${levels}`);
+    assert.ok(elapsedMs < 100, `levels=${levels} заняло ${elapsedMs.toFixed(2)}мс — подозрение на экспоненциальный обход`);
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Пункт 3 — PositionView без unrealizedPnl; C-2 — бранд-тип, только derivePositionView.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -408,11 +432,14 @@ test('C-1 раунд 2: масштаб 987654321.7, 20 РАВНЫХ транше
 });
 
 test('C-1 раунд 2: симметрия открытия/закрытия — суб-эпсилонное ОТКРЫТИЕ с чистого места тоже не создаёт позицию', () => {
-  // Второе следствие абсолютного порога (раунд 2): суб-эпсилонное открытие (`buy 1e-10`) раньше НЕ
-  // проверялось вовсе (прямое присваивание без сравнения с нулём) — один и тот же по масштабу шум
-  // трактовался по-разному в зависимости от направления. Теперь isNegligibleQty симметрична.
-  const ledger: ExecutionLedger = [fill(T1, 'buy', 100, 1e-10, { clientOrderId: 'o-1' })];
-  assert.equal(derivePositionView(ledger), undefined, 'qty=1e-10 ниже абсолютного пола — не открывает позицию');
+  // Второе следствие абсолютного порога (раунд 2): суб-эпсилонное открытие раньше НЕ проверялось
+  // вовсе (прямое присваивание без сравнения с нулём) — один и тот же по масштабу шум трактовался
+  // по-разному в зависимости от направления. Теперь isNegligibleQty симметрична. Величина —
+  // 1e-13 (ниже нового пола 1e-12 раунда 3, см. POSITION_QTY_RELATIVE_EPSILON), НЕ 1e-10 (раунд 2
+  // использовал 1e-10 против прежнего пола 1e-9 — с ужесточённым в раунде 3 порогом 1e-10 уже ВЫШЕ
+  // пола и по праву открывает позицию, см. следующий тест).
+  const ledger: ExecutionLedger = [fill(T1, 'buy', 100, 1e-13, { clientOrderId: 'o-1' })];
+  assert.equal(derivePositionView(ledger), undefined, 'qty=1e-13 ниже нового абсолютного пола 1e-12 — не открывает позицию');
 });
 
 test('C-1 раунд 2: обычное дробное открытие (0.01, выше пола) по-прежнему открывает позицию', () => {
@@ -435,6 +462,73 @@ test('C-1 раунд 2: крупный масштаб — реальный ча�
   assert.equal(position.side, 'long');
   assert.ok(Math.abs(position.qty - 900_000_000) < 1, `остаток обязан быть ~900000000, получено ${position.qty}`);
   assert.equal(position.openedAt, T1, 'реальный частичный выход не открывает новую эру');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C-1 (Critical, ВОСПРОИЗВЕДЕНО РЕВЬЮ РАУНДА 3) — сама КОНСТАНТА раунда 2 (1e-9) была пересолена:
+// при пике эры 1e9 порог = 1e-9×1e9 = ЦЕЛАЯ базовая единица, и настоящий остаток в 1 (или 1000 при
+// пике 1e12) единицу поглощался как «шум» — симметрия, о которой просил раунд 2, была нарушена
+// ровно наоборот тому, что чинил раунд 2. Хуже: peakAbsQty липкий на всю эру, поэтому ЖИВАЯ
+// позиция, схлопнутая посреди жизни, переоткрывалась следующим филлом со сфабрикованным openedAt.
+// Новая константа 1e-12 (ИЗМЕРЕНА: максимум накопленной относительной ошибки на 108 прогонах
+// ревью — 8.8e-16, запас ~1000×) закрывает это без возврата фантомов на дробных/крупных лестницах.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('C-1 раунд 3: buy 1e9, sell 1e9-1 — настоящий остаток 1 базовая единица, НЕ flat', () => {
+  const ledger: ExecutionLedger = [
+    fill(T1, 'buy', 100, 1e9, { clientOrderId: 'o-1' }),
+    fill(T2, 'sell', 100, 1e9 - 1, { clientOrderId: 'o-2' }),
+  ];
+  const position = derivePositionView(ledger);
+  assert.ok(position, 'остаток в 1 базовую единицу на масштабе 1e9 — реальная позиция, не шум');
+  assert.equal(position.side, 'long');
+  assert.equal(position.qty, 1);
+  assert.equal(position.openedAt, T1);
+});
+
+test('C-1 раунд 3: buy 1e12, sell 1e12-1000 — настоящий остаток 1000 единиц, НЕ flat', () => {
+  const ledger: ExecutionLedger = [
+    fill(T1, 'buy', 100, 1e12, { clientOrderId: 'o-1' }),
+    fill(T2, 'sell', 100, 1e12 - 1000, { clientOrderId: 'o-2' }),
+  ];
+  const position = derivePositionView(ledger);
+  assert.ok(position, 'остаток в 1000 единиц на масштабе 1e12 — реальная позиция, не шум');
+  assert.equal(position.side, 'long');
+  assert.equal(position.qty, 1000);
+});
+
+test('C-1 раунд 3: buy 1e9, sell 1e9+1 — настоящий флип в short 1, НЕ flat', () => {
+  const ledger: ExecutionLedger = [
+    fill(T1, 'buy', 100, 1e9, { clientOrderId: 'o-1' }),
+    fill(T2, 'sell', 100, 1e9 + 1, { clientOrderId: 'o-2' }),
+  ];
+  const position = derivePositionView(ledger);
+  assert.ok(position, 'настоящий флип в short на 1 единицу — не шум');
+  assert.equal(position.side, 'short');
+  assert.equal(position.qty, 1);
+  assert.equal(position.openedAt, T2, 'флип на 1 единицу — тоже НОВАЯ эра, а не проигнорированный шум');
+});
+
+test('C-1 раунд 3: «проглоченная эра» — живая позиция посреди жизни НЕ схлопывается и НЕ фабрикует openedAt', () => {
+  // Дословный сценарий ревью: buy 1e9 → sell 1e9-10 (остаток 10, та же эра) → sell 9 (остаток 1,
+  // РЕАЛЬНЫЙ, не шум — раунд 2 здесь ошибочно давал FLAT и уничтожал эру) → buy 5 (добавление к
+  // ТОЙ ЖЕ живой позиции, не новая эра). Итог обязан быть {long, qty:6, openedAt:T1}, а не
+  // {long, qty:5, openedAt:t(buy 5)} с потерянной 1 единицей и сфабрикованным openedAt.
+  const ledger: ExecutionLedger = [
+    fill(T1, 'buy', 100, 1e9, { clientOrderId: 'o-1' }),
+    fill(T2, 'sell', 110, 1e9 - 10, { clientOrderId: 'o-2' }),
+    fill(T3, 'sell', 120, 9, { clientOrderId: 'o-3' }),
+    fill(timestampUs(1_700_000_180_000_000), 'buy', 130, 5, { clientOrderId: 'o-4' }),
+  ];
+  const position = derivePositionView(ledger);
+  assert.ok(position);
+  assert.equal(position.side, 'long');
+  assert.equal(position.qty, 6, 'остаток 1 (после sell 9) плюс добавленные 5 — эра НЕ прерывалась');
+  assert.equal(position.openedAt, T1, 'openedAt обязан остаться от ИСХОДНОГО открытия — эра не прерывалась');
+  // avgEntryPrice: смешанная цена оставшейся 1 единицы (100, цена исходного открытия — выходы не
+  // меняют avgEntryPrice) и добавленных 5 по 130: (100*1 + 130*5) / 6.
+  const expectedAvg = (100 * 1 + 130 * 5) / 6;
+  assert.ok(Math.abs(position.avgEntryPrice - expectedAvg) < 1e-6, `avgEntryPrice ${position.avgEntryPrice} !== ${expectedAvg}`);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -463,6 +557,29 @@ test('I-5: isExecutionLedgerEntry отвергает недоверенную з
   assert.equal(isExecutionLedgerEntry(negativeQtyNaNPrice), false, 'qty<=0 и price=NaN оба отвергаются');
 
   assert.equal(isExecutionLedger([corrupted, stringPrice]), false);
+});
+
+test('Minor: isExecutionLedgerEntry отвергает лишний ключ — та же строгость, что isPlainActorState', () => {
+  // Прогон ревью: `{...goodFill, rogue: () => 1}` проходил как `true` — isPlainActorState
+  // (event-driven.ts) функцию под лишним ключом отвергает, а этот гейт той же границы (чекпойнт
+  // изолята) — нет. Два гейта одной JSON-границы обязаны быть одинаково строги.
+  const goodFill = {
+    kind: 'fill',
+    ts: 1,
+    clientOrderId: 'o',
+    side: 'buy' as const,
+    price: 100,
+    qty: 10,
+    fee: 0,
+    last: false,
+  };
+  assert.equal(isExecutionLedgerEntry(goodFill), true, 'фикстура сама обязана быть валидной записью');
+  assert.equal(isExecutionLedgerEntry({ ...goodFill, rogue: () => 1 }), false, 'лишний ключ с функцией отвергается');
+  assert.equal(isExecutionLedgerEntry({ ...goodFill, rogue: 'harmless string' }), false, 'лишний ключ отвергается, даже если plain-data');
+
+  const goodFunding = { kind: 'funding_settlement', ts: 1, amount: -1.5 };
+  assert.equal(isExecutionLedgerEntry(goodFunding), true, 'фикстура сама обязана быть валидной записью');
+  assert.equal(isExecutionLedgerEntry({ ...goodFunding, rogue: 1 }), false, 'то же для funding_settlement');
 });
 
 test('I-5: derivePositionView бросает на недоверенной записи, а не молча портит PositionView', () => {
