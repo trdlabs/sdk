@@ -57,14 +57,24 @@ export const STRATEGY_LIFECYCLES = ['single_position', 'event_driven'] as const;
 export const DEFAULT_STRATEGY_LIFECYCLE: StrategyLifecycle = 'single_position';
 
 /**
- * Версия контракта, ВВОДЯЩАЯ surface 083 E1 (поле `lifecycle` и хук `onEvent`).
+ * Версия контракта, ВВОДЯЩАЯ surface актора (`lifecycle`, хук `onEvent`, `marketData`, `warmup`).
  *
  * Манифест, объявляющий этот surface под более ранней версией, отклоняется
- * (`unsupported_contract_version`): иначе bump `017.2 → 017.3` был бы чисто декларативным —
- * `contractVersion` перестал бы говорить, какой конверт манифеста автор объявил, и версия
- * потеряла бы способность что-либо ограждать.
+ * (`unsupported_contract_version`): иначе bump был бы чисто декларативным — `contractVersion`
+ * перестал бы говорить, какой конверт манифеста автор объявил, и версия потеряла бы способность
+ * что-либо ограждать.
+ *
+ * **083 S1 задача 6: `017.3` → `017.4`.** Исходный E1 (released в `@trdlabs/sdk@0.13.0` под
+ * `017.3`) обещал СОВСЕМ ДРУГОЙ surface, чем существует в пакете сейчас — мс-таймстемпы вместо
+ * µs-бранд-типов, составной `ActorBarEvent` вместо пяти раздельных рыночных событий, released
+ * `OpenOrderView`/`PositionView`/`FlatMarketSlice`, которых больше нет (см. doc у `OrderSide`
+ * ниже). Задачи 1–5 этапа S1 переписали этот surface ЦЕЛИКОМ, не расширили его аддитивно — значит
+ * держать гейт на `017.3` означало бы признавать манифесты, написанные ПРОТИВ формы, которой в
+ * пакете больше нет физически. Не бамп-как-формальность: манифест, объявленный под `017.3` и
+ * несущий новый surface, теперь отклоняется РОВНО ТАК ЖЕ, как раньше отклонялся под `017.1`/
+ * `017.2`, — `017.3` больше не покрывает этот surface, несмотря на то что когда-то его вводила.
  */
-export const EVENT_DRIVEN_MIN_CONTRACT_VERSION = '017.3';
+export const EVENT_DRIVEN_MIN_CONTRACT_VERSION = '017.4';
 
 /** Хуки, допустимые для `event_driven` (единая точка входа + опциональный жизненный цикл). */
 export const EVENT_DRIVEN_HOOKS = ['init', 'onEvent', 'dispose'] as const;
@@ -325,6 +335,26 @@ export interface ActorOrderCanceledEvent {
   readonly clientOrderId: string;
 }
 
+/**
+ * Отмена отклонена: команда `cancel` пришла, когда заявка уже была в терминальном состоянии
+ * (чаще всего — уже полностью исполнилась) к моменту обработки. Недостающее событие v1 (§3.10,
+ * задача 6) — цепочка `cancel → canceled` не знала этого исхода: гонку «отмена против исполнения»
+ * в детерминированном бэктесте разрешает правило каскада (§3.8.4, порядок фазы 1 в
+ * `MARKET_KIND_RANK`, `contract/constants.ts`), но результат ОБЯЗАН приехать событием — иначе
+ * автор не может корректно завершить FSM своей политики выхода: хендлер, ждущий `order.canceled`
+ * после поданного `cancel`, никогда не получил бы терминального сигнала и завис бы в
+ * промежуточном состоянии политики навсегда. Аналог Nautilus `on_order_cancel_rejected`.
+ * Терминальный (сама заявка остаётся в том состоянии, в котором была до `cancel` — как правило,
+ * `filled`; повторный `cancel` той же уже-терминальной заявки — не новая гонка, а забытая ошибка
+ * автора).
+ */
+export interface ActorOrderCancelRejectedEvent {
+  readonly kind: 'cancel.rejected';
+  readonly ts: TimestampUs;
+  readonly clientOrderId: string;
+  readonly reason: string;
+}
+
 /** Заявка истекла по TIF/сроку. Терминальный. */
 export interface ActorOrderExpiredEvent {
   readonly kind: 'order.expired';
@@ -378,6 +408,7 @@ export type ActorInputEvent =
   | ActorOrderDeniedEvent
   | ActorOrderRejectedEvent
   | ActorOrderCanceledEvent
+  | ActorOrderCancelRejectedEvent
   | ActorOrderExpiredEvent
   | ActorFillEvent
   | ActorTimerEvent;
@@ -406,6 +437,7 @@ export const ACTOR_INPUT_EVENT_KINDS = [
   'order.denied',
   'order.rejected',
   'order.canceled',
+  'cancel.rejected',
   'order.expired',
   'fill',
   'timer',
@@ -563,6 +595,34 @@ export type ActorCommandKind = (typeof ACTOR_COMMAND_KINDS)[number];
  * Батч команд — то, что актор возвращает из одного `onEvent` и что пересекает JSON-границу
  * изолята. Хост валидирует именно ЕГО (схема `actor-command-batch`): единичная команда — деталь
  * внутри батча, отдельно через границу не ходит.
+ *
+ * **Fail-closed при отказе — задача 6, §3.8.4/§3.10. Два класса отказов разведены, а не смешаны
+ * в один:**
+ *
+ * | класс | исход |
+ * | --- | --- |
+ * | штатный risk / domain rejection | prefix committed, suffix skipped, инстанс продолжает работу |
+ * | throw из `dispatch`, невалидный по схеме батч, breach бюджета (`ActorBudgets`, ниже) | `halt+finalize` |
+ *
+ * Формулировка первого класса дословно (§3.8.4): если валидная по схеме команда получает штатный
+ * domain/risk rejection, ранее успешно применённый префикс батча **не откатывается**, отклонённая
+ * команда **не имеет частичных эффектов**, а оставшийся суффикс **не применяется**.
+ * Соответствующее `order.rejected` / `order.denied` / `cancel.rejected` ставится в очередь и
+ * доставляется актору ПОСЛЕ завершения батча (не синхронно внутри текущего `dispatch`). Причина
+ * обрыва суффикса — fail-closed: команды ПОСЛЕ отклонённой вычислены под предположением, которое
+ * только что опровергнуто (например, доступный notional после отклонённого `place`), и применять
+ * их дальше значило бы исполнять план против уже устаревшего состояния.
+ *
+ * Отсутствие отката — не упрощение реализации, а физика: откатить уже отправленный в live ордер
+ * невозможно, а разное поведение backtest/live на этом шве сломало бы Л4 (cross-host parity).
+ *
+ * Второй класс (`throw` из `dispatch`, батч, не прошедший схему на границе, breach любого
+ * бюджета из `ActorBudgets`) — авария ядра, а не доменный факт: инстанс переводится в
+ * `halt+finalize` целиком, потому что живая позиция при мёртвой стратегии — та же
+ * рассинхронизация, что закрывает инвариант «оба состояния умирают вместе»
+ * (`mem883ede17e9bfeb24`). Halt наблюдаем актором (может успеть получить `dispose`, если хост его
+ * вызывает как часть finalize) — сам детектор breach и его проводка в `halt+finalize` реализуются
+ * в S2 (`@trdlabs/engine`); здесь — только форма и наблюдаемое разведение двух классов.
  */
 export type ActorCommandBatch = readonly ActorCommand[];
 
@@ -1247,6 +1307,30 @@ export type PositionView = {
 } & { readonly [POSITION_VIEW_BRAND]: 'derivePositionView' };
 
 /**
+ * Единственный источник случайности актора (задача 6, «дом авторского RNG», §3.6).
+ *
+ * **Дом — ЯДРО, не авторское состояние.** `ctx.rng` — capability ядра, засеиваемая от
+ * `ActorInit.seed` прогона; её состояние ОБЯЗАНО лежать в `engineState.rng` чекпойнта ядра ВМЕСТЕ
+ * с движковым состоянием (S2, `@trdlabs/engine`), а НЕ быть полем авторского state-слота — иначе
+ * Л2 (recovery-equivalence) поймает расхождение на первом же чекпойнте стратегии, которая дёрнула
+ * `rng.next()`: полный реплей от genesis переиграл бы тот же бросок, а восстановление из
+ * чекпойнта дало бы уже другой бросок, если состояние генератора не чекпойнтится вместе с движком.
+ *
+ * **Ambient-случайности у актора нет ФИЗИЧЕСКИ, а не по соглашению.** `ActorRng` — ЕДИНСТВЕННЫЙ
+ * канал случайного числа, доступный хендлерам: сигнатуры `StrategyActor.onEvent`/`ActorHandlers`
+ * получают его только через `ctx.rng`, никаким другим параметром или глобалом. Спрятать
+ * собственный генератор (например, замыкание, сидированное `Math.random()` один раз при `init`)
+ * ВНУТРИ авторского state-слота тоже не выйдет: `ActorStateValue`/`isPlainActorState` (выше)
+ * структурно отклоняют функции — замыкание генератора не переживёт JSON-границу чекпойнта, а
+ * значит не может служить вторым, недокументированным источником случайности между вызовами
+ * `onEvent`. Требование выражено ФОРМОЙ — закрытостью `ActorStateValue` плюс единственной точкой
+ * входа `ctx.rng` — а не только договорённостью «не звать `Math.random`» в тексте доки.
+ */
+export interface ActorRng {
+  readonly next: () => number;
+}
+
+/**
  * Read-only контекст актора — pull-модель (Nautilus Cache), задача 5.
  *
  * Инвариант **state-before-handler**: к МОМЕНТУ вызова хендлера, которому доставлено какое-то
@@ -1256,7 +1340,8 @@ export type PositionView = {
  * хендлера и читать его же сразу после (гипотетически) должны давать один и тот же ответ.
  *
  * Состав: `clock.nowUs()`/`rng.next()` — минимум, без которого хендлер не может быть
- * детерминированным по определению (CH-5, задачи S1/2). `readiness` (задача 3, требование 6) —
+ * детерминированным по определению (CH-5, задачи S1/2); `rng: ActorRng`, доc — «дом авторского
+ * RNG» (см. `ActorRng` выше). `readiness` (задача 3, требование 6) —
  * без него `place` не может быть отклонена ДО прогрева нигде, кроме неявного соглашения хоста.
  * `orders`/`position` (задача 5, требование 2) — доступ к открытым заявкам и к позиции; ОБЕ формы
  * (`OpenOrderView`/`PositionView`, выше) читаются как СНИМОК на момент вызова, не как живая ссылка
@@ -1268,7 +1353,7 @@ export type PositionView = {
  */
 export interface ActorContext {
   readonly clock: { nowUs(): TimestampUs };
-  readonly rng: { next(): number };
+  readonly rng: ActorRng;
   readonly readiness: ActorReadiness;
   readonly orders: { readonly open: () => readonly OpenOrderView[] };
   readonly position: () => PositionView | undefined;
@@ -1382,6 +1467,69 @@ export function findDuplicateSubscriptionIds(
   return [...duplicates];
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Бюджеты актора (задача 6, §3.10) — per-dispatch + кумулятивный per-frontier. НЕТ per-session.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Бюджет на ОДИН вызов dispatch (§3.10) — прототип: LEAN Isolator, «лимит на шаг, не на ран».
+ * Все поля опциональны: хост включает ровно те измерения, что умеет мерить (например, paper-режим
+ * может не иметь дешёвого способа измерить CPU-время и ограничиться только `maxCommandsPerBatch`).
+ *
+ * `maxCpuUs`/`maxWallUs` — раздельные измерения намеренно: CPU-время актора и wall-clock ОДНОГО
+ * вызова `dispatch` расходятся под конкуренцией хоста (GC пауза, соседний изолят) — лимит на
+ * одно не заменяет лимит на другое.
+ */
+export interface ActorDispatchBudget {
+  readonly maxCpuUs?: DurationUs;
+  readonly maxWallUs?: DurationUs;
+  /** Максимум команд в ОДНОМ батче, который `onEvent` возвращает за один вызов. */
+  readonly maxCommandsPerBatch?: number;
+}
+
+/**
+ * Кумулятивный бюджет на ОДИН frontier (`businessTsUs`) — §3.8.4, прямое следствие каскадной
+ * доставки domain/risk rejection (см. doc `ActorCommandBatch` выше). Раз `order.rejected` /
+ * `cancel.rejected` приезжает В ТОМ ЖЕ frontier, актор может отвечать на отказ повтором той же
+ * команды бесконечно, не превысив НИ ОДНОГО per-dispatch лимита — `ActorDispatchBudget` этот класс
+ * зацикливания структурно не видит, потому что каждый отдельный `dispatch` внутри цепочки остаётся
+ * дёшев.
+ *
+ * ОБА поля обязательны (в отличие от `ActorDispatchBudget`): именно они закрывают конкретную,
+ * уже названную дыру, а не предоставляют опциональную защиту сверх.
+ *
+ * - `maxCascadeDepth` — глубина цепочки команда → событие → команда ВНУТРИ одного `businessTs`.
+ * - `maxEventsPerFrontier` — общее число событий, доставленных актору в пределах одного frontier.
+ */
+export interface ActorCumulativeFrontierBudget {
+  readonly maxCascadeDepth: number;
+  readonly maxEventsPerFrontier: number;
+}
+
+/**
+ * Полный набор бюджетов актора (§3.10) — ИСКЛЮЧИТЕЛЬНО per-dispatch и кумулятивный per-frontier.
+ *
+ * **Per-session бюджета здесь НЕТ, и это форма, а не пробел** (задача 6, требование 2 брифа: «per-
+ * session бюджета быть не должно»). У актора «сессия» бесконечна по построению: `StrategyActor`
+ * живёт от `init` до `dispose` произвольно долго, чекпойнтится и восстанавливается (§3.6), и не
+ * имеет момента «конец сессии», которому лимит мог бы быть осмысленно привязан. Реальный прод-
+ * отказ (F6, `backtester` sandbox timeout diagnosis) был РОВНО исчерпанием `wallTimeMsPerSession`
+ * изолята — механизм, спроектированный для одноразового скрипта конечной длины, на долгоживущем
+ * акторе деградирует в ГАРАНТИРОВАННЫЙ отказ, не в редкий: рано или поздно любой актор,
+ * работающий достаточно долго, упирается в лимит, никак не связанный с тем, полезен он ещё или
+ * нет. `ActorBudgets` несёт РОВНО два измерения — per-dispatch и per-frontier; третьего
+ * структурно не существует (см. тест на отсутствие — попытка добавить `perSession` в литерал
+ * этого типа не проходит excess-property-check).
+ *
+ * Breach ЛЮБОГО бюджета — `halt+finalize`, наблюдаемый актором (см. doc `ActorCommandBatch`
+ * выше, второй класс отказов). Сам детектор breach — S2 (`@trdlabs/engine`); здесь только форма
+ * лимитов, которые он обязан читать.
+ */
+export interface ActorBudgets {
+  readonly perDispatch: ActorDispatchBudget;
+  readonly perFrontier: ActorCumulativeFrontierBudget;
+}
+
 /**
  * Параметры создания экземпляра актора (один экземпляр на символ).
  *
@@ -1414,6 +1562,15 @@ export function findDuplicateSubscriptionIds(
  * ТОЛЬКО S2 (`@trdlabs/engine`): например, детектировать «actor.snapshotState существует, но
  * между двумя чекпойнтами не вызывался» рантайм-инвариантом движка. Здесь — явное имя риска, не
  * умолчание (та же дисциплина, что применена к C-2 этого же раунда).
+ *
+ * `budgets` (задача 6, §3.10) — опционально: хост может не конфигурировать лимиты вовсе (например,
+ * в контексте, где breach проверяется снаружи). См. `ActorBudgets`.
+ *
+ * `seed` — помимо детерминированного `clientOrderId` (см. doc в шапке файла), единственный
+ * источник детерминированной случайности прогона: сидирует `ctx.rng` (`ActorRng`, doc у
+ * `ActorContext` ниже) — «дом авторского RNG», §3.6. Актор НЕ получает `seed` напрямую и не может
+ * засеять им СВОЙ генератор — единственный легальный канал случайности внутри хендлеров это
+ * `ctx.rng.next()`.
  */
 export interface ActorInit<S extends ActorStateValue = ActorStateValue> {
   readonly params: Readonly<Record<string, unknown>>;
@@ -1421,6 +1578,9 @@ export interface ActorInit<S extends ActorStateValue = ActorStateValue> {
   readonly symbol: string;
   readonly subscriptions: readonly ActorSubscriptionDescriptor[];
   readonly state?: S;
+  /** Бюджеты исполнения (§3.10) — опционально: хост может не конфигурировать лимиты вовсе
+   *  (например, в контексте, где breach проверяется снаружи). См. `ActorBudgets`. */
+  readonly budgets?: ActorBudgets;
 }
 
 /** Кодовый модуль стратегии формы `event_driven` (аналог `StrategyModule` для `single_position`). */
@@ -1471,6 +1631,7 @@ export type ActorHandlers<S extends ActorStateValue = ActorStateValue> = {
   onOrderDenied?(event: ActorOrderDeniedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderRejected?(event: ActorOrderRejectedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderCanceled?(event: ActorOrderCanceledEvent, ctx: ActorContext): ActorHandlerResult;
+  onOrderCancelRejected?(event: ActorOrderCancelRejectedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderExpired?(event: ActorOrderExpiredEvent, ctx: ActorContext): ActorHandlerResult;
   onFill?(event: ActorFillEvent, ctx: ActorContext): ActorHandlerResult;
   onTimer?(event: ActorTimerEvent, ctx: ActorContext): ActorHandlerResult;
@@ -1562,6 +1723,9 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
         break;
       case 'order.canceled':
         if (handlers.onOrderCanceled) return toBatch(handlers.onOrderCanceled(event, ctx));
+        break;
+      case 'cancel.rejected':
+        if (handlers.onOrderCancelRejected) return toBatch(handlers.onOrderCancelRejected(event, ctx));
         break;
       case 'order.expired':
         if (handlers.onOrderExpired) return toBatch(handlers.onOrderExpired(event, ctx));

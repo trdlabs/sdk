@@ -5,7 +5,7 @@
     "kind": "strategy",
     "name": "Actor on old contract version",
     "summary": "Объявляет форму актора под версией контракта, которая её не знает",
-    "rationale": "Негативная фикстура: lifecycle/onEvent введены в 017.3; под 017.2 конверта нет.",
+    "rationale": "Негативная фикстура: surface актора (lifecycle/onEvent) требует contractVersion >=017.4 (083 S1 задача 6 подняла порог с 017.3, который когда-то вводил этот surface, но больше его не покрывает); под 017.2 конверта нет и подавно.",
     "author": "agent",
     "contractVersion": "017.2",
     "status": "research_only",

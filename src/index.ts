@@ -13,6 +13,9 @@ export {
   // 083 S1 задача 3 — закрытый каталог видов MarketDataRequirement (research-contract/event-driven.ts).
   // НЕ путать с SUPPORTED_MARKET_DATA_KINDS выше — тот легаси-набор для dataNeeds-флагов 017.1-017.3.
   MARKET_DATA_KINDS,
+  // 083 S1 задача 6 — единственный источник ранга вида рыночного наблюдения в merge key диспетча
+  // (§3.8.2); экспортирован, чтобы engine/backtester не завели по своей копии.
+  MARKET_KIND_RANK,
 } from './contract/constants.js';
 
 // --- Shared contract types (type re-export → zero runtime) ---

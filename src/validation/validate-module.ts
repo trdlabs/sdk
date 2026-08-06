@@ -286,7 +286,7 @@ function validateSampleDecisions(
 }
 
 /**
- * 083 E1 — новый surface конверта ограждён объявленной версией контракта.
+ * 083 E1/S1 — новый surface конверта ограждён объявленной версией контракта.
  *
  * `SUPPORTED_CONTRACT_VERSIONS` — возрастающий список, поэтому «не старше» проверяется позицией в
  * нём, без semver-парсера. Версия вне набора уже отклонена шагом 2 — здесь не дублируем.
@@ -297,14 +297,22 @@ function validateSurfaceContractVersion(
   ctx: ContractContext,
   issues: ValidationIssue[],
 ): void {
-  // К-1 (раунд правок 2, Critical): `marketData` — ТОЖЕ часть surface 083 E1/S1, введённого
-  // 017.3, и обязана ограждаться версией на равных с `lifecycle`/`onEvent`; без этого пункта
-  // манифест 017.1 с `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём issues —
-  // ровно тот случай, который делает bump версии чисто декларативным (комментарий у
-  // `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts). Владелец решил закрыть дыру здесь, а
-  // не бампом до 017.4 — тот bump поднимет ВЕСЬ новый surface одним движением в задаче 6.
+  // К-1 (раунд правок 2, Critical, задача 3): `marketData` — ТОЖЕ часть surface актора и обязана
+  // ограждаться версией на равных с `lifecycle`/`onEvent`; без этого пункта манифест 017.1 с
+  // `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём issues — ровно тот случай,
+  // который делает bump версии чисто декларативным (комментарий у `EVENT_DRIVEN_MIN_CONTRACT_
+  // VERSION`, event-driven.ts).
+  //
+  // `warmup` (задача 6, долг задачи 3 — тот же класс дыры, что К-1 закрывала для `marketData`):
+  // поле заведено задачей 3 (`ModuleManifest.warmup?: ActorWarmupSource`), но НЕ было включено в
+  // этот гейт до задачи 6 — манифест 017.1/017.2 с `warmup` без `lifecycle`/`marketData` проходил
+  // бы версионный гейт молча. `warmup` осмыслен ТОЛЬКО для формы `event_driven` (прогрев готовит
+  // актора к первому торгующему событию), значит принадлежит тому же surface и тому же гейту.
   const usesEventDrivenSurface =
-    manifest.lifecycle !== undefined || hooks.includes('onEvent') || manifest.marketData !== undefined;
+    manifest.lifecycle !== undefined ||
+    hooks.includes('onEvent') ||
+    manifest.marketData !== undefined ||
+    manifest.warmup !== undefined;
   if (!usesEventDrivenSurface) return;
 
   const declared: unknown = manifest.contractVersion;
@@ -319,8 +327,8 @@ function validateSurfaceContractVersion(
   issues.push(
     makeIssue(
       'unsupported_contract_version',
-      `конверт 083 E1 (lifecycle/onEvent) введён в contractVersion ` +
-        `"${EVENT_DRIVEN_MIN_CONTRACT_VERSION}"; манифест объявляет "${declared}"`,
+      `surface event_driven (lifecycle/onEvent/marketData/warmup) требует contractVersion ` +
+        `≥"${EVENT_DRIVEN_MIN_CONTRACT_VERSION}"; манифест объявляет "${declared}"`,
       '/contractVersion',
     ),
   );

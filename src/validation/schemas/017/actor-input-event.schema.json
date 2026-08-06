@@ -36,6 +36,9 @@
           "$ref": "#/definitions/ActorOrderCanceledEvent"
         },
         {
+          "$ref": "#/definitions/ActorOrderCancelRejectedEvent"
+        },
+        {
           "$ref": "#/definitions/ActorOrderExpiredEvent"
         },
         {
@@ -627,6 +630,32 @@
       ],
       "additionalProperties": false,
       "description": "Заявка отменена (по команде `cancel` либо средой). Терминальный."
+    },
+    "ActorOrderCancelRejectedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "cancel.rejected"
+        },
+        "ts": {
+          "$ref": "#/definitions/TimestampUs"
+        },
+        "clientOrderId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "clientOrderId",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Отмена отклонена: команда `cancel` пришла, когда заявка уже была в терминальном состоянии (чаще всего — уже полностью исполнилась) к моменту обработки. Недостающее событие v1 (§3.10, задача 6) — цепочка `cancel → canceled` не знала этого исхода: гонку «отмена против исполнения» в детерминированном бэктесте разрешает правило каскада (§3.8.4, порядок фазы 1 в `MARKET_KIND_RANK`, `contract/constants.ts`), но результат ОБЯЗАН приехать событием — иначе автор не может корректно завершить FSM своей политики выхода: хендлер, ждущий `order.canceled` после поданного `cancel`, никогда не получил бы терминального сигнала и завис бы в промежуточном состоянии политики навсегда. Аналог Nautilus `on_order_cancel_rejected`. Терминальный (сама заявка остаётся в том состоянии, в котором была до `cancel` — как правило, `filled`; повторный `cancel` той же уже-терминальной заявки — не новая гонка, а забытая ошибка автора)."
     },
     "ActorOrderExpiredEvent": {
       "type": "object",

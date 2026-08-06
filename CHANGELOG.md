@@ -13,6 +13,174 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+### 083 S1 — `event_driven` actor contract rewritten (SDK only; runtimes untouched)
+
+Rewrites the `event_driven` kernel contract E1 that shipped in `0.13.0` under `CONTRACT_VERSION
+017.3`. Scope stays SDK-only per the S1 plan: types, constants and the manifest validator — no
+runtime in any repo is touched (the isolate dispatch boundary, the engine and RiskEngine stay S2/S3
+behind the epic's return trigger). `CONTRACT_VERSION` moves `017.3` → `017.4`; `017.1`–`017.3`
+manifests keep validating for the default `single_position` shape, but the actor surface now
+requires `017.4` — see the note under Changed for why `017.3`, which originally introduced this
+surface, no longer covers it.
+
+> **This release removes five exports that shipped in `@trdlabs/sdk@0.13.0`.** `OpenOrderStatus`,
+> `OpenOrderView`, `PositionView`, `FlatMarketSlice` and `ActorBarEvent` are gone. Three of the five
+> names come back under `Added` below with **incompatible shapes** — a consumer importing
+> `OpenOrderStatus`/`OpenOrderView`/`PositionView` by name still compiles, but a value or literal
+> built against the `0.13.0` shape does not satisfy the new one (see Removed/Added for the exact
+> field-level diff). Every actor-surface timestamp (`ts`, `createdTs`) moves from plain `number`
+> milliseconds to the branded µs types `TimestampUs`/`DurationUs`, and the timer command field
+> `afterMs` is renamed `afterUs` to carry the new unit in its name — a silent, non-compile-time-
+> visible unit change for any consumer that read these fields as raw milliseconds. The legacy
+> `MarketDataKind` (`'openInterest'|'liquidations'|'funding'|'taker'`, the `dataNeeds`-flag catalog)
+> is renamed `LegacyMarketDataKind`; the bare name `MarketDataKind` now refers to the closed
+> `MarketDataRequirement` catalog (five snake_case kinds, unrelated to the renamed one). And, as
+> with `0.13.0`, this release adds sixteen new `ValidationCode` members — anything holding an
+> exhaustive `Record<ValidationCode, Severity>` needs the same coordinated update `backtester`
+> needed last time (see the note at the top of the `0.13.0` entry below for why this is
+> source/build-breaking despite being wire-additive).
+>
+> `find_usages` across all eight ecosystem repos (backtester, control-center, engine, lab,
+> mock-platform, office, platform, sdk) found no external import of any removed or renamed name
+> before each change shipped — the five exports above (task 2 report) and the `MarketDataKind`
+> rename (task 3 report) — so nothing downstream is known to break today, but anything importing
+> these names from outside the tracked repos should treat this as breaking.
+
+### Removed
+
+- `research-contract`: `OpenOrderStatus` (`'submitted' | 'accepted' | 'triggered' |
+  'partially_filled'`), `OpenOrderView` (`{ clientOrderId, side, type: OrderType, status, qtyUsd,
+  filledQtyUsd, price?, stopPrice?, reduceOnly?, createdTs: number }`), `PositionView` (`{ side,
+  qty, avgPrice, unrealizedPnl? }`) and `FlatMarketSlice` (`{ oi?, liq?, funding?, taker? }`) — the
+  exact shapes released in `0.13.0`. `ActorBarEvent` (`{ kind: 'bar', ts: number, bar, closedCandles?,
+  market?: FlatMarketSlice }`) is gone with them: a composite `market.bar.closed` cannot have a
+  single `subscriptionId`/`datasetId` when its sources (OI, liquidations, taker, funding) arrive at
+  different times with different value semantics (point observation vs. interval aggregate) — see
+  the doc block atop `ActorInputEvent` in `event-driven.ts`.
+
+### Added (083 S1, tasks 1–6)
+
+- `research-contract`: `TimestampUs`/`DurationUs` branded µs types (`time-us.ts`) — the actor
+  surface's only internal time unit from here on, replacing `number` milliseconds on every envelope,
+  order/fill/timer event and timer command field.
+- `research-contract`: five separate market events replacing `ActorBarEvent` —
+  `MarketCandleClosedEvent`, `MarketOpenInterestObservedEvent`,
+  `MarketLiquidationsBucketClosedEvent`, `MarketTakerVolumeBucketClosedEvent`,
+  `MarketFundingObservedEvent` — plus `MarketSubscriptionStatusChangedEvent` (one generic gap
+  signal, task 4) and, closing this task, `ActorOrderCancelRejectedEvent` (`'cancel.rejected'`): the
+  missing v1 outcome for "a `cancel` arrived after the order already reached a terminal state"
+  (Nautilus `on_order_cancel_rejected` analogue) — without it an author's exit-policy FSM waiting on
+  `order.canceled` after issuing `cancel` never gets a terminal signal. `ActorInputEvent` is now
+  fourteen kinds; `ACTOR_INPUT_EVENT_KINDS` is kept in sync with it by a two-directional type
+  guarantee (`as const satisfies readonly ActorInputEvent['kind'][]` plus
+  `AssertNoUncoveredKind<Exclude<...>>`), not a hand-maintained list.
+- `research-contract`: `MarketDataRequirement` — the closed five-kind catalog
+  (`candles`/`open_interest`/`liquidations`/`taker_volume`/`funding`, `MARKET_DATA_KINDS` in
+  `contract/constants.ts`) a strategy declares instead of legacy `dataNeeds` flags;
+  `ModuleManifest.marketData` (required, non-empty array, for `lifecycle: 'event_driven'`) and
+  `ModuleManifest.warmup` (declared warm-up source, `'tape_replay' | 'kernel_prefetch'`).
+- `research-contract`: `ObservationStatus<T>` (`observation-status.ts`) — three states of a market
+  observation (`never_observed` / `observed` / `gap`, not two), `finality`/`revision` modelled as
+  orthogonal axes (not a `provisional`/`final`/`revised` tri-state), plus `parseArchiveRow` and
+  `checkRevisionTransition` — fail-closed gates for the archive-row and revision-stream invariants.
+- `research-contract`: the authored state slot — `ActorStateValue` (closed recursive plain-data
+  union), `isPlainActorState` (runtime gate: rejects functions/closures under any key, cycles,
+  non-plain objects, `NaN`/`Infinity`/`-0`, sparse arrays, accessor properties, and nesting past
+  `MAX_ACTOR_STATE_DEPTH`), `StrategyActor<S>` / `ActorInit<S>` / `EventDrivenModule<S>` /
+  `ActorHandlers<S>` parameterized by the state type, and the `snapshotState`/`ActorInit.state`
+  checkpoint pair. `defineActor` now emits `snapshotState` on the returned actor exactly when the
+  author declares one (it could not produce it at all before this task).
+- `research-contract`: `OpenOrderView`/`PositionView` **redesigned from scratch** — not a
+  restoration of the removed `0.13.0` shapes. `OpenOrderView` is now a discriminated union by order
+  type (`OpenMarketOrderView | OpenLimitOrderView | OpenStopMarketOrderView`), with
+  `status: 'submitted' | 'accepted'` orthogonal to `filledQty` (a base-currency `qty`/`filledQty`
+  pair, not the old `filledQtyUsd`, which could not express "how much of this order is left").
+  `PositionView` is brand-sealed — only producible via `derivePositionView` (`actor-state.ts`) — and
+  carries a derived `openedAt` (absent from the `0.13.0` shape); `unrealizedPnl` is deliberately
+  omitted (see doc `PositionView`, `event-driven.ts`, for why keeping it live would have meant
+  reintroducing per-bar position updates).
+- `contract`: `MARKET_KIND_RANK` (`contract/constants.ts`) — the normative rank of each market-
+  observation kind inside the dispatch merge key (`(businessTsUs, phasePriority, marketKindRank,
+  stableSubscriptionId, sourceSequence)`): `open_interest`=1, `liquidations`=2, `taker_volume`=3,
+  `funding`=4, `candles`=5 (the candle close is the canonical decision point — by the time it fires,
+  the actor has already seen this frontier's OI/liquidations/taker/funding, which is what the old
+  atomic minute snapshot gave for free). The single source of this order for `@trdlabs/engine` and
+  `backtester` to import instead of each maintaining its own copy; the scheduler that reads it is
+  S2, not this package.
+- `research-contract`: `ActorRng` — the actor's only randomness capability, now a named type (was
+  an anonymous `{ next(): number }` on `ActorContext.rng`) documenting that its home is the engine
+  checkpoint (`engineState.rng`), seeded from `ActorInit.seed`, never the authored state slot —
+  a closure-based RNG hidden inside authored state cannot survive `isPlainActorState` at the
+  checkpoint boundary, so the "no ambient randomness" requirement is enforced structurally, not by
+  convention.
+- `research-contract`: `ActorDispatchBudget` / `ActorCumulativeFrontierBudget` / `ActorBudgets`
+  (`ActorInit.budgets`, optional) — per-dispatch CPU-time/wall-time/command-count limits, plus a
+  cumulative `maxCascadeDepth`/`maxEventsPerFrontier` budget for one frontier (`businessTsUs`).
+  Deliberately **no per-session budget**: an actor's "session" is unbounded by construction
+  (`init` → `dispose`, checkpointed and restored indefinitely), and `wallTimeMsPerSession` on a
+  long-lived actor is exactly the mechanism that produced a real production timeout (`backtester`
+  sandbox diagnosis, F6) — a limit designed for a one-shot script degrades into a guaranteed failure
+  on an actor with no natural end. The cumulative frontier budget closes a companion hole: because a
+  domain/risk rejection is delivered as a cascade **within the same frontier** (§3.8.4), an actor
+  can retry the same rejected command indefinitely without ever breaching a per-dispatch limit.
+- `research-contract`: `ActorCommandBatch` now documents the fail-closed contract for command
+  rejection verbatim — a domain/risk rejection commits the already-applied batch prefix, gives the
+  rejected command no partial effect, and skips the remaining suffix (no rollback: a live order
+  already sent cannot be un-sent); a `dispatch` throw, a batch that fails schema validation, or a
+  budget breach is `halt+finalize` instead. The two classes were previously undocumented.
+- `validation`: sixteen new `ValidationCode` members shipped across tasks 3–4 —
+  `missing_market_data_requirement`, `unsupported_market_data_scope`, `unsupported_revision_policy`,
+  `unsupported_funding_form`, `dataset_boundary_violation`, `invalid_market_data_requirement`,
+  `duplicate_market_data_requirement_id` (task 3, `MarketDataRequirement` validation);
+  `observation_revision_conflict`, `observation_revision_finalized`, `observation_revision_skipped`,
+  `observation_revision_regressed`, `observation_revision_invalid`,
+  `observation_revision_key_mismatch`, `observation_revision_start_invalid`,
+  `observation_finality_demoted`, `observation_archive_row_corrupt` (task 4, observation revision
+  stream). **Source-breaking for consumers holding an exhaustive `Record<ValidationCode,
+  Severity>`** — see the warning block at the top of this entry and the equivalent note on `0.13.0`
+  below.
+
+### Changed
+
+- `research-contract` / `contract`: `CONTRACT_VERSION` `017.3` → `017.4`; `SUPPORTED_CONTRACT_
+  VERSIONS` appends `017.4` (both the published root copy in `contract/constants.ts` and the active
+  copy in `research-contract/catalogs.ts` that `platformContractContext()` actually validates
+  against — kept in lockstep). `017.1`–`017.3` manifests keep validating for the `single_position`
+  default shape. **The actor surface (`lifecycle` / `onEvent` / `marketData` / `warmup`) now
+  requires `017.4`** — a manifest declaring any of these under `017.3` is REJECTED
+  (`unsupported_contract_version`), even though `017.3` is the version that originally introduced
+  this surface in `0.13.0`. This is not a formality: tasks 1–5 rewrote the surface `017.3` promised
+  in its entirety (µs types replacing ms, `OpenOrderView`/`PositionView` redesigned, the authored
+  state slot and its generic added, `ActorBarEvent` removed) rather than extending it additively —
+  `017.3` no longer describes a shape this package can produce, so a manifest declaring the new
+  surface under `017.3` is declaring a contract this package does not honor. `warmup` is folded into
+  this gate for the first time in this release (it existed as a field since task 3 but was not yet
+  version-gated — the same class of gap `marketData`'s version gate closed earlier in S1).
+- `research-contract`: `ActorTimerSetAfterCommand.afterMs: number` → `afterUs: DurationUs`; every
+  `ts` / `atTs` / `createdTs` on the actor surface moves from `number` (implicitly milliseconds) to
+  `TimestampUs` / `DurationUs` (µs, the sole internal unit `§3.2` of the actor spec requires) so
+  that a forgotten `* 1000` stops being executable code.
+- `contract`: the legacy `MarketDataKind` (`'openInterest' | 'liquidations' | 'funding' | 'taker'`,
+  the `dataNeeds`-flag catalog that still governs `017.1`–`017.3` manifests) is renamed
+  `LegacyMarketDataKind` (`contract/market-data-kinds.ts`); the bare name `MarketDataKind` now names
+  the new `MARKET_DATA_KINDS` catalog (`contract/constants.ts`) — the two catalogs are unrelated in
+  shape (`camelCase` four kinds vs. `snake_case` five kinds) and had been sharing one name before
+  this rename.
+
+### Migration
+
+No consumer imports the five removed exports or the pre-rename `MarketDataKind` from
+`@trdlabs/sdk` today — verified by `find_usages` across all eight ecosystem repos before each
+removal/rename shipped (task 2 report for the five exports, task 3 report for the rename) — so
+nothing downstream is known to break. Authoring
+(or generating) an `event_driven` module against the `0.13.0` shapes does need to move: bump
+`contractVersion` to `017.4`; construct every actor-surface timestamp with `timestampUs()`/
+`durationUs()` instead of a raw millisecond number; rename `afterMs` to `afterUs`; and read
+`OpenOrderView`/`PositionView` against their redesigned shape (see Added above), not the `0.13.0`
+one — there is no compatibility shim between the two. Nothing here executes yet: S2
+(`@trdlabs/engine`) still gates the epic's return trigger, and this release changes no runtime in
+any repo.
+
 ## [0.13.0] - 2026-07-23
 
 Two contract changes ship together. **0.12.0 was prepared but never published** — npm went

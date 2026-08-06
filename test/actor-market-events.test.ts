@@ -77,6 +77,8 @@ function labelOf(kind: ActorInputEvent['kind']): string {
       return kind;
     case 'order.canceled':
       return kind;
+    case 'cancel.rejected':
+      return kind;
     case 'order.expired':
       return kind;
     case 'fill':
@@ -108,6 +110,7 @@ test('ACTOR_INPUT_EVENT_KINDS содержит ровно те виды, что 
     'order.denied',
     'order.rejected',
     'order.canceled',
+    'cancel.rejected',
     'order.expired',
     'fill',
     'timer',

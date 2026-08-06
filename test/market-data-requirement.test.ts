@@ -59,6 +59,10 @@ const CANDLES_REQ: MarketDataRequirement = {
   priceType: 'trade',
 };
 
+// 083 S1 задача 6: surface event_driven (lifecycle/onEvent/marketData) требует ≥017.4 — весь
+// файл тестирует `marketData`, который сам этот surface и есть, поэтому BASE обязан нести версию
+// ≥017.4, не 017.3 (тот больше не покрывает surface, который когда-то вводил — см. doc
+// `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
 const BASE: ModuleManifest = {
   id: 'm',
   version: '0.1.0',
@@ -67,7 +71,7 @@ const BASE: ModuleManifest = {
   summary: 's',
   rationale: 'r',
   author: 'agent',
-  contractVersion: '017.3',
+  contractVersion: '017.4',
   status: 'research_only',
   paramsSchema: { type: 'object', additionalProperties: false, properties: {} },
   capabilities: { platformSdk: true },
@@ -321,8 +325,10 @@ test('С-2: warmup объявлен В КОНТРАКТЕ (ModuleManifest), пр
 // нулём issues — версия конверта переставала говорить, какой surface объявлен.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('К-1: marketData под контрактом 017.1/017.2 отвергается — surface введён в 017.3', () => {
-  for (const contractVersion of ['017.1', '017.2'] as const) {
+// 083 S1 задача 6: `017.3` (когда-то вводивший surface) больше его НЕ покрывает — весь surface
+// переписан задачами 1–5 и теперь требует ≥017.4 (см. doc `EVENT_DRIVEN_MIN_CONTRACT_VERSION`).
+test('К-1/задача 6: marketData под контрактом 017.1/017.2/017.3 отвергается — surface требует ≥017.4', () => {
+  for (const contractVersion of ['017.1', '017.2', '017.3'] as const) {
     const manifest: ModuleManifest = {
       id: 'm3',
       version: '0.1.0',
@@ -482,7 +488,7 @@ test('м-7: overlay с marketData отвергается', () => {
     summary: 's',
     rationale: 'r',
     author: 'agent',
-    contractVersion: '017.3',
+    contractVersion: '017.4',
     status: 'research_only',
     paramsSchema: { type: 'object', additionalProperties: false, properties: {} },
     capabilities: { platformSdk: true },

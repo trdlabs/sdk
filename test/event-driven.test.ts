@@ -79,8 +79,12 @@ const ACTOR_MARKET_DATA: readonly MarketDataRequirement[] = [
   },
 ];
 
+// 083 S1 задача 6: весь surface актора (lifecycle/onEvent/marketData/warmup) требует ≥017.4 —
+// `BASE.contractVersion` (017.3) больше НЕ покрывает его, значит `ACTOR` переопределяет версию
+// явно (см. doc `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
 const ACTOR: ModuleManifest = {
   ...BASE,
+  contractVersion: '017.4',
   lifecycle: 'event_driven',
   hooks: ['init', 'onEvent', 'dispose'],
   marketData: ACTOR_MARKET_DATA,
@@ -98,18 +102,20 @@ test('манифест без lifecycle остаётся валидным и п�
 });
 
 test('манифесты прежних версий контракта остаются поддержанными', () => {
-  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3']);
-  assert.equal(CONTRACT_VERSION, '017.3');
-  for (const contractVersion of ['017.1', '017.2', '017.3']) {
+  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4']);
+  assert.equal(CONTRACT_VERSION, '017.4');
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4']) {
     assert.equal(check({ ...BASE, contractVersion }).status, 'accepted', contractVersion);
   }
 });
 
 // --- версия контракта ограждает новый surface ---
 
-test('surface 083 E1 введён в 017.3 и под прежними версиями не принимается', () => {
-  assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, '017.3');
-  for (const contractVersion of ['017.1', '017.2']) {
+// 083 S1 задача 6: бамп подвинул порог с 017.3 на 017.4 — 017.3, введший исходный E1-surface,
+// больше его не покрывает (тот surface переписан целиком, см. doc EVENT_DRIVEN_MIN_CONTRACT_VERSION).
+test('surface актора требует ≥017.4; 017.1–017.3 отвергают его, включая 017.3, введший исходный E1', () => {
+  assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, '017.4');
+  for (const contractVersion of ['017.1', '017.2', '017.3']) {
     for (const [label, manifest] of [
       ['lifecycle: event_driven', { ...ACTOR, contractVersion }],
       ['lifecycle: single_position', { ...BASE, lifecycle: 'single_position' as const, contractVersion }],
@@ -125,12 +131,12 @@ test('surface 083 E1 введён в 017.3 и под прежними верси
   }
 });
 
-test('под 017.3 тот же surface принимается', () => {
-  assert.equal(check({ ...ACTOR, contractVersion: '017.3' }).status, 'accepted');
+test('под 017.4 тот же surface принимается', () => {
+  assert.equal(check({ ...ACTOR, contractVersion: '017.4' }).status, 'accepted');
 });
 
 test('манифест БЕЗ нового surface версией не ограждается', () => {
-  for (const contractVersion of ['017.1', '017.2', '017.3']) {
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4']) {
     assert.equal(check({ ...BASE, contractVersion }).status, 'accepted', contractVersion);
   }
 });
@@ -141,7 +147,10 @@ test('дефолтная форма — single_position', () => {
 });
 
 test('явный single_position эквивалентен отсутствию поля, но попадает в проекцию', () => {
-  const res = check({ ...BASE, lifecycle: 'single_position' });
+  // Явное поле `lifecycle` — уже surface (см. цикл выше, вариант «lifecycle: single_position»
+  // среди отвергаемых под старыми версиями), поэтому нужна версия ≥017.4, даже хотя значение —
+  // дефолтная форма.
+  const res = check({ ...BASE, contractVersion: '017.4', lifecycle: 'single_position' });
   assert.equal(res.status, 'accepted');
   assert.equal((res.normalized as { lifecycle?: string }).lifecycle, 'single_position');
 });
@@ -172,13 +181,16 @@ test('event_driven с хуками фазовой модели отклоняе�
 });
 
 test('single_position с onEvent отклоняется', () => {
-  const codes = codesOf({ ...BASE, hooks: ['onBarClose', 'onEvent'] });
+  // hooks содержит 'onEvent' — уже surface, версия ≥017.4 нужна, чтобы изолировать код именно
+  // lifecycle_form_invalid (а не смешать его с unsupported_contract_version).
+  const codes = codesOf({ ...BASE, contractVersion: '017.4', hooks: ['onBarClose', 'onEvent'] });
   assert.deepEqual(codes, ['lifecycle_form_invalid']);
 });
 
 test('overlay не может объявить форму актора', () => {
   const overlay: ModuleManifest = {
     ...BASE,
+    contractVersion: '017.4',
     kind: 'overlay',
     lifecycle: 'event_driven',
     hooks: ['apply'],
@@ -193,7 +205,9 @@ test('overlay не может объявить форму актора', () => {
 });
 
 test('неизвестная форма — schema_invalid по enum, без причин о наборе хуков', () => {
-  const codes = codesOf({ ...BASE, lifecycle: 'multi_position' as never });
+  // Поле lifecycle присутствует (хотя бы и с мусорным значением) — уже surface, версия ≥017.4
+  // нужна, чтобы изолировать код именно schema_invalid.
+  const codes = codesOf({ ...BASE, contractVersion: '017.4', lifecycle: 'multi_position' as never });
   assert.deepEqual(codes, ['schema_invalid']);
 });
 
@@ -618,6 +632,7 @@ test('defineActor: диспетчер покрывает ровно замкну
     onOrderDenied: (e) => void handled.push(e.kind),
     onOrderRejected: (e) => void handled.push(e.kind),
     onOrderCanceled: (e) => void handled.push(e.kind),
+    onOrderCancelRejected: (e) => void handled.push(e.kind),
     onOrderExpired: (e) => void handled.push(e.kind),
     onFill: (e) => void handled.push(e.kind),
     onTimer: (e) => void handled.push(e.kind),
@@ -727,6 +742,8 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
       return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'venue' };
     case 'order.canceled':
       return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
+    case 'cancel.rejected':
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'already_filled' };
     case 'order.expired':
       return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
     case 'fill':
