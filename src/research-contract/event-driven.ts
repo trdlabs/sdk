@@ -27,7 +27,7 @@
 //   ниже). Сам состав `orders()`/`position()` в `ActorContext` эта задача (S1/2) НЕ вводит —
 //   заглушка ждёт задачу 5.
 
-import { MARKET_DATA_KINDS, type MarketDataKind } from '../contract/constants.js';
+import type { MarketDataKind } from '../contract/constants.js';
 import type { Bar } from './context.js';
 import type {
   FundingReading,
@@ -555,13 +555,17 @@ export interface InstrumentRef {
  * ломающим изменением формы — но валидатор в v1 (`validate-module.ts`) ОТВЕРГАЕТ `'venue'`, а не
  * молча не находит данные (`unsupported_market_data_scope`).
  *
- * Решение владельца 2026-08-06, обе причины — свойство данных, НЕ временный пробел реализации:
+ * Решение владельца 2026-08-06, обе причины — СВОЙСТВО АРХИВА, не временный пробел реализации:
  * (1) ликвидационный каскад — явление РЫНОЧНОЕ, а не биржевое, и агрегат по восьми биржам ловит
  * его полнее и раньше любой отдельной книги; стакан этот контракт не моделирует (исполнение —
  * worst-case барными филлами), поэтому отсутствие `'venue'` дырок в модели не создаёт; (2) архив
  * по-источниковых (per-venue) значений НЕ хранит и хранить НЕ будет — это не вопрос приоритета.
+ *
+ * Названо `MarketDataScope`, а не голым `Scope` — пакет прямо сейчас разгребает коллизию имён
+ * вокруг `MarketDataKind` (раунд правок 2, С-3/К-2); бронировать ещё одно предельно общее слово в
+ * публичной поверхности значило бы плодить тот же класс проблемы намеренно.
  */
-export type Scope = 'venue' | 'aggregate';
+export type MarketDataScope = 'venue' | 'aggregate';
 
 /**
  * Единица измерения значения (open_interest/taker_volume). Общий тип для обоих видов —
@@ -572,76 +576,83 @@ export type MarketDataUnit = 'base' | 'quote' | 'usd';
 
 /**
  * Capability-политика ревизий значения (требование 4 задачи 3). В v1 валидатор принимает ТОЛЬКО
- * `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — не потому что данные
- * невозможны, а потому что `provisional_and_revisions` НЕ РЕАЛИЗОВАН в v1 (это единственная из
- * трёх v1-отклонений задачи 3, которая — политика/дорожная карта, а не свойство архива;
- * funding-settlement и `scope:'venue'` ниже — наоборот, свойство архива, см. их док-комментарии).
- * Поле входит в форму СРАЗУ, чтобы будущая реализация ревизий не потребовала ломающего добавления
- * поля — симметрично тому, как `ObservedValue.finality`/`revision` уже несёт оба поля в v1.
+ * `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — СВОЙСТВО АРХИВА, а не дорожная
+ * карта (раунд правок 2, С-1: прежняя формулировка «не реализовано в v1» была ошибкой брифа,
+ * владелец поправил прозой — governs проза, инлайн-комментарий кода ей противоречил).
+ *
+ * Причина буквально: колонок `finality`/`revision` в архиве нет — строка одна на
+ * `(minute_ts, symbol)`, второй записи с тем же ключом физически негде лежать. Провизорного
+ * случая в данных к тому же не существует вовсе: прогнозная funding rate, наблюдавшаяся в минуту
+ * T, — окончательная запись факта «в T провайдер показывал X»; смена прогноза в T+1 — НОВОЕ point
+ * observation, а не ревизия T. Поле входит в форму СРАЗУ (не отклоняется вовсе на уровне типа),
+ * чтобы появление колонок ревизий не потребовало ломающего добавления поля — симметрично тому, как
+ * `ObservedValue.finality`/`revision` уже несёт оба поля в v1.
  */
 export type RevisionPolicy =
   | { readonly mode: 'final_only' }
   | { readonly mode: 'provisional_and_revisions' };
 
-// Общие поля пяти требований ниже — ПОВТОРЕНЫ в каждом варианте union'а, а не унаследованы через
-// `extends` общего интерфейса: та же дисциплина, что у семейства `ActorInputEvent` выше (ни один
-// `Market*Event`/`Actor*Event` не использует `extends`). Причина не только стилевая — экспортный
-// интерфейс, наследующий НЕэкспортный базовый через `extends`, ломает генерацию `.d.ts`
-// (`declaration: true`, tsconfig.json): базовое имя «протекало» бы в объявление, оставаясь при
-// этом недоступным импортёру. Разница по сравнению с брифом (там `RequirementBase` дан как
-// иллюстрация) — обе формы структурно эквивалентны, эта безопасна по построению.
-//
-// - `id` — идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг
-//   при резолве, задача 8, а не автор манифеста).
-// - `instrument` — какой инструмент (см. `InstrumentRef`).
-// - `interval` — гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная
-//   внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом).
-// - `lookback` — сколько истории проекция ядра ОБЯЗАНА держать.
-// - `revisionPolicy` — см. `RevisionPolicy` выше.
-
-/** Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`. */
-export interface CandlesMarketDataRequirement {
-  readonly kind: 'candles';
+/**
+ * Общие поля пяти требований ниже. НЕ экспортирован — пять интерфейсов используют его через
+ * `extends`; сам он не часть публичной поверхности (раунд правок 2, К-3: прежний отказ от
+ * `extends` был основан на неверном предположении, что экспортный интерфейс не может наследовать
+ * неэкспортный без поломки `.d.ts` — опровергнуто прогоном `tsc --declaration
+ * --emitDeclarationOnly` с флагами `tsconfig.json`, exit 0; TS4020 относится к именам,
+ * НЕНАЗЫВАЕМЫМ в `.d.ts`, module-scope интерфейс называем всегда).
+ */
+interface RequirementBase {
+  /** Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при
+   *  резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли
+   *  среди требований одного манифеста (`invalid_market_data_requirement` /
+   *  `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с
+   *  binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше. */
   readonly id: string;
   readonly instrument: InstrumentRef;
+  /** Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица;
+   *  НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает
+   *  `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не
+   *  описывает никакой реальный поток данных. */
   readonly interval: DurationUs;
+  /**
+   * Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов
+   * длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1
+   * отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл
+   * заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и
+   * голый `number` без названной единицы был бы той же двусмысленностью.
+   */
   readonly lookback: number;
-  readonly revisionPolicy: RevisionPolicy;
+  /**
+   * Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно
+   * `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8).
+   * Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая
+   * написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше.
+   */
+  readonly revisionPolicy?: RevisionPolicy;
+}
+
+/** Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`. */
+export interface CandlesMarketDataRequirement extends RequirementBase {
+  readonly kind: 'candles';
   readonly priceType: 'trade';
 }
 
 /** Open interest — point observation (см. `MarketOpenInterestObservedEvent`, задача 2). */
-export interface OpenInterestMarketDataRequirement {
+export interface OpenInterestMarketDataRequirement extends RequirementBase {
   readonly kind: 'open_interest';
-  readonly id: string;
-  readonly instrument: InstrumentRef;
-  readonly interval: DurationUs;
-  readonly lookback: number;
-  readonly revisionPolicy: RevisionPolicy;
-  readonly scope: Scope;
+  readonly scope: MarketDataScope;
   readonly unit: MarketDataUnit;
 }
 
 /** Ликвидации — interval aggregate за закрытый бакет (см. `MarketLiquidationsBucketClosedEvent`). */
-export interface LiquidationsMarketDataRequirement {
+export interface LiquidationsMarketDataRequirement extends RequirementBase {
   readonly kind: 'liquidations';
-  readonly id: string;
-  readonly instrument: InstrumentRef;
-  readonly interval: DurationUs;
-  readonly lookback: number;
-  readonly revisionPolicy: RevisionPolicy;
-  readonly scope: Scope;
+  readonly scope: MarketDataScope;
 }
 
 /** Taker-объём — interval aggregate (см. `MarketTakerVolumeBucketClosedEvent`). */
-export interface TakerVolumeMarketDataRequirement {
+export interface TakerVolumeMarketDataRequirement extends RequirementBase {
   readonly kind: 'taker_volume';
-  readonly id: string;
-  readonly instrument: InstrumentRef;
-  readonly interval: DurationUs;
-  readonly lookback: number;
-  readonly revisionPolicy: RevisionPolicy;
-  readonly scope: Scope;
+  readonly scope: MarketDataScope;
   readonly unit: MarketDataUnit;
 }
 
@@ -649,19 +660,13 @@ export interface TakerVolumeMarketDataRequirement {
  * Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent`
  * — на уровне СОБЫТИЯ они структурно неотличимы, различение живёт на ПОДПИСКЕ, то есть здесь).
  *
- * `form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — НЕ потому что это
- * временно не реализовано, а потому что соответствующего датасета ФИЗИЧЕСКИ не существует: в
- * архиве нет колонки settlement. Это свойство архива, а не политика — как только появится
- * колонка, `form: 'settlement'` резолвится без изменения формы этого типа.
+ * `form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — СВОЙСТВО АРХИВА: колонки
+ * settlement в архиве физически нет. Как только появится колонка, `form: 'settlement'`
+ * резолвится без изменения формы этого типа.
  */
-export interface FundingMarketDataRequirement {
+export interface FundingMarketDataRequirement extends RequirementBase {
   readonly kind: 'funding';
-  readonly id: string;
-  readonly instrument: InstrumentRef;
-  readonly interval: DurationUs;
-  readonly lookback: number;
-  readonly revisionPolicy: RevisionPolicy;
-  readonly scope: Scope;
+  readonly scope: MarketDataScope;
   readonly form: 'rate' | 'settlement';
 }
 
@@ -674,20 +679,22 @@ export type MarketDataRequirement =
   | FundingMarketDataRequirement;
 
 /**
- * Двусторонняя типовая гарантия «`MARKET_DATA_KINDS` ⇔ `MarketDataRequirement['kind']`» — та же
- * идиома, что `ACTOR_INPUT_EVENT_KINDS`/`ActorInputEvent` выше (раунд правок 1, I-1), применённая
- * к каталогу задачи 3. `const x: T[] = []` для этой цели НЕ годится (пустой литерал присваивается
- * любому `T[]`, ничего не проверяя — перепроверено эмпирически при разборе задачи 2). Массив живёт
- * в `contract/constants.ts` (единственный источник истины, требование 1) и объявлен раньше, чем
- * существует `MarketDataRequirement` (`constants.ts` не может импортировать `event-driven.ts` —
- * цикл), поэтому направление «массив ⊆ union» проверяется ЗДЕСЬ, а не в месте объявления массива.
+ * Двусторонняя типовая гарантия «`MarketDataKind` ⇔ `MarketDataRequirement['kind']`» — та же
+ * идиома, что `ACTOR_INPUT_EVENT_KINDS`/`ActorInputEvent` выше (раунд правок 1, I-1), но ЦЕЛИКОМ
+ * на типах: `MarketDataKind` импортирован как `import type` (см. шапку файла) — ни здесь, ни где-
+ * либо в файле нет рантайм-значения `MARKET_DATA_KINDS` (раунд правок 2, м-3: прежняя форма с
+ * `satisfies` на самом массиве создавала лишний рантайм-импорт `research-contract → contract` в
+ * публикуемом `dist` ради проверки, которая целиком решается на этапе типов — стёрлась бы вместе
+ * со всем остальным `import type`).
  */
-const _marketDataKindsCoverRequirementUnion =
-  MARKET_DATA_KINDS satisfies readonly MarketDataRequirement['kind'][];
+type _AssertMarketDataKindCoveredByUnion = AssertNoUncoveredKind<
+  Exclude<MarketDataKind, MarketDataRequirement['kind']>
+>;
 
 /**
- * Направление «union ⊆ массив»: вариант `MarketDataRequirement`, чей `kind` забыли дописать в
- * `MARKET_DATA_KINDS`, не удовлетворяет `extends never` и ломает сборку здесь (TS2344).
+ * Обратное направление: вариант `MarketDataRequirement`, чей `kind` забыли дописать в
+ * `MARKET_DATA_KINDS` (`contract/constants.ts`), не удовлетворяет `extends never` и ломает сборку
+ * здесь (TS2344).
  */
 type _AssertNoUncoveredMarketDataKind = AssertNoUncoveredKind<
   Exclude<MarketDataRequirement['kind'], MarketDataKind>

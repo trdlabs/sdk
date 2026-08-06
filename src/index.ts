@@ -10,13 +10,21 @@ export {
   CONTRACT_VERSION,
   SUPPORTED_CONTRACT_VERSIONS,
   SUPPORTED_MARKET_DATA_KINDS,
+  // 083 S1 задача 3 — закрытый каталог видов MarketDataRequirement (research-contract/event-driven.ts).
+  // НЕ путать с SUPPORTED_MARKET_DATA_KINDS выше — тот легаси-набор для dataNeeds-флагов 017.1-017.3.
+  MARKET_DATA_KINDS,
 } from './contract/constants.js';
 
 // --- Shared contract types (type re-export → zero runtime) ---
 export type {
-  MarketDataKind,
+  // Легаси-каталог (переименован из MarketDataKind, 083 S1 задача 3 раунд правок 2, С-3/К-2) —
+  // см. doc-комментарий в contract/market-data-kinds.ts.
+  LegacyMarketDataKind,
   MarketDataCoverageState,
 } from './contract/market-data-kinds.js';
+
+// 083 S1 задача 3 — MarketDataKind чистое имя теперь принадлежит НОВОМУ каталогу.
+export type { MarketDataKind } from './contract/constants.js';
 
 // --- Historical contract DTO (materialized; SDK-owned) ---
 export {

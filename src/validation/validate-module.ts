@@ -85,13 +85,19 @@ const NONDETERMINISM_NEEDS = ['wallClock', 'uncontrolledRandom'] as const;
 const STRUCTURAL_NEEDS = ['closedCandlesUpToCurrent', 'asOfIndicators'] as const;
 
 /**
- * 083 S1 задача 3 — семантика `manifest.marketData`, которую JSON-схема (шаг 1) не выражает:
- * `scope: 'venue'` и `revisionPolicy.mode: 'provisional_and_revisions'` и `funding.form:
- * 'settlement'` — все ТИПОВО легальные значения (схема их пропустит), отклоняются здесь
- * fail-closed по данным/дорожной карте (см. doc-комментарии `Scope`/`RevisionPolicy`/
- * `FundingMarketDataRequirement` в `event-driven.ts` — там же зафиксировано, какое из трёх
- * отклонений — временное (`provisional_and_revisions`, дорожная карта), а какие два —
- * постоянное свойство архива (venue-scope, funding-settlement)).
+ * 083 S1 задача 3 — семантика `manifest.marketData`, которую JSON-схема (шаг 1) не выражает: три
+ * ЗАКРЫТЫЕ оси (`scope`, `revisionPolicy.mode`, `funding.form`) и структурная адекватность
+ * (`id`/`lookback`/`interval`/`instrument`) — ТИПОВО легальные значения, схема их пропустит.
+ *
+ * Три оси проверяются БЕЛЫМ списком, не чёрным (раунд правок 2, К-4): каталог `kind` защищён
+ * двусторонней типовой гарантией (`event-driven.ts`), но `scope`/`revisionPolicy.mode`/
+ * `funding.form` — обычные string-поля без такой защиты; чёрный список (`=== 'venue'`) пропускал
+ * бы ЛЮБОЕ третье значение без единого issue, хотя дока обещает «только aggregate»/«только
+ * final_only»/«только rate». Тот же принцип уже применяет соседний `recognizedNeeds` выше (023).
+ *
+ * Все три v1-отклонения — СВОЙСТВО АРХИВА, ни одно не дорожная карта (раунд правок 2, С-1: прежняя
+ * формулировка «revisionPolicy не реализован» была ошибкой брифа, поправленной владельцем прозой —
+ * полное обоснование в doc `RevisionPolicy`, `event-driven.ts`).
  *
  * Вход НЕ типизирован как `MarketDataRequirement[]` намеренно: на входе валидатора — недоверенный
  * JSON, а не типизированное значение (та же дисциплина, что `asRecord`/`dataNeeds` выше). Элемент,
@@ -100,41 +106,114 @@ const STRUCTURAL_NEEDS = ['closedCandlesUpToCurrent', 'asOfIndicators'] as const
  */
 function validateMarketDataRequirements(marketData: unknown, issues: ValidationIssue[]): void {
   if (!Array.isArray(marketData)) return;
+  const seenIds = new Set<string>();
+
   marketData.forEach((entry, i) => {
     const req = asRecord(entry);
     if (req === null) return;
     const base = `/marketData/${i}`;
 
-    if (req.scope === 'venue') {
+    // Белый список: scope легален ТОЛЬКО 'aggregate', когда присутствует — candles его вообще не
+    // несёт (undefined там структурная норма, не отсутствующее значение).
+    if (req.scope !== undefined && req.scope !== 'aggregate') {
       issues.push(
         makeIssue(
           'unsupported_market_data_scope',
-          `scope "venue" не резолвится в v1 — архив не хранит и не будет хранить по-источниковые ` +
-            `значения (kind "${String(req.kind)}")`,
+          `scope "${String(req.scope)}" не резолвится в v1 — архив не хранит и не будет хранить ` +
+            `по-источниковые значения (kind "${String(req.kind)}")`,
           `${base}/scope`,
         ),
       );
     }
 
+    // Белый список: revisionPolicy.mode легален ТОЛЬКО 'final_only'. Отсутствие всего поля сюда
+    // не заходит (revisionPolicy === null): по умолчанию равносильно final_only (м-8).
     const revisionPolicy = asRecord(req.revisionPolicy);
-    if (revisionPolicy !== null && revisionPolicy.mode === 'provisional_and_revisions') {
+    if (revisionPolicy !== null && revisionPolicy.mode !== 'final_only') {
       issues.push(
         makeIssue(
           'unsupported_revision_policy',
-          'revisionPolicy.mode "provisional_and_revisions" не реализован в v1 (принимается только final_only)',
+          `revisionPolicy.mode "${String(revisionPolicy.mode)}" не резолвится в v1 — колонок ` +
+            `finality/revision в архиве нет: строка одна на (minute_ts, symbol), второй записи с ` +
+            `тем же ключом физически негде лежать (принимается только final_only)`,
           `${base}/revisionPolicy/mode`,
         ),
       );
     }
 
-    if (req.kind === 'funding' && req.form === 'settlement') {
+    // Белый список: form легален ТОЛЬКО 'rate' — проверяется только у funding, у остальных видов
+    // поля form не существует вовсе.
+    if (req.kind === 'funding' && req.form !== 'rate') {
       issues.push(
         makeIssue(
           'unsupported_funding_form',
-          'funding с form "settlement" не резолвится в v1: соответствующего датасета (колонки settlement) в архиве нет',
+          `funding с form "${String(req.form)}" не резолвится в v1: соответствующего датасета ` +
+            `(колонки settlement) в архиве нет`,
           `${base}/form`,
         ),
       );
+    }
+
+    // К-5: id — единственная ручка связи требования с binding'ом ниже по цепочке (задача 8);
+    // дубль делает связывание неоднозначным именно там, где резолвер обязан быть fail-closed.
+    if (typeof req.id === 'string') {
+      if (req.id.length === 0) {
+        issues.push(
+          makeIssue('invalid_market_data_requirement', 'id требования не может быть пустой строкой', `${base}/id`),
+        );
+      } else if (seenIds.has(req.id)) {
+        issues.push(
+          makeIssue(
+            'duplicate_market_data_requirement_id',
+            `id "${req.id}" уже использован другим требованием этого манифеста`,
+            `${base}/id`,
+          ),
+        );
+      }
+      seenIds.add(req.id);
+    }
+
+    // м-1: числовые/строковые границы, которые тип не выражает (DurationUs допускает отрицательные
+    // значения как разность моментов — здесь interval, а не разность, отрицательное/нулевое
+    // значение бессмысленно; lookback — число шагов, отрицательное/дробное тоже).
+    if (typeof req.lookback === 'number' && (!Number.isInteger(req.lookback) || req.lookback < 0)) {
+      issues.push(
+        makeIssue(
+          'invalid_market_data_requirement',
+          `lookback должен быть целым неотрицательным числом шагов длиной interval, получено: ${req.lookback}`,
+          `${base}/lookback`,
+        ),
+      );
+    }
+    if (typeof req.interval === 'number' && (!Number.isInteger(req.interval) || req.interval <= 0)) {
+      issues.push(
+        makeIssue(
+          'invalid_market_data_requirement',
+          `interval должен быть положительным целым числом микросекунд, получено: ${req.interval}`,
+          `${base}/interval`,
+        ),
+      );
+    }
+    const instrument = asRecord(req.instrument);
+    if (instrument !== null) {
+      if (typeof instrument.venue === 'string' && instrument.venue.length === 0) {
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            'instrument.venue не может быть пустой строкой',
+            `${base}/instrument/venue`,
+          ),
+        );
+      }
+      if (typeof instrument.symbol === 'string' && instrument.symbol.length === 0) {
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            'instrument.symbol не может быть пустой строкой',
+            `${base}/instrument/symbol`,
+          ),
+        );
+      }
     }
   });
 }
@@ -218,7 +297,14 @@ function validateSurfaceContractVersion(
   ctx: ContractContext,
   issues: ValidationIssue[],
 ): void {
-  const usesEventDrivenSurface = manifest.lifecycle !== undefined || hooks.includes('onEvent');
+  // К-1 (раунд правок 2, Critical): `marketData` — ТОЖЕ часть surface 083 E1/S1, введённого
+  // 017.3, и обязана ограждаться версией на равных с `lifecycle`/`onEvent`; без этого пункта
+  // манифест 017.1 с `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём issues —
+  // ровно тот случай, который делает bump версии чисто декларативным (комментарий у
+  // `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts). Владелец решил закрыть дыру здесь, а
+  // не бампом до 017.4 — тот bump поднимет ВЕСЬ новый surface одним движением в задаче 6.
+  const usesEventDrivenSurface =
+    manifest.lifecycle !== undefined || hooks.includes('onEvent') || manifest.marketData !== undefined;
   if (!usesEventDrivenSurface) return;
 
   const declared: unknown = manifest.contractVersion;
@@ -381,6 +467,18 @@ export function validateModule(
     }
     if (typeof manifest.interceptionPoint !== 'string' || manifest.interceptionPoint.length === 0) {
       issues.push(makeIssue('schema_invalid', 'overlay обязан указывать interceptionPoint', '/interceptionPoint'));
+    }
+    // м-7 (раунд правок 2): marketData принадлежит форме event_driven — overlay перехватывает
+    // решение фазовой модели single_position и собственных требований к рыночным данным не имеет.
+    // Прецедент отклонения бессмысленных для формы полей — lifecycle_form_invalid (083 E1).
+    if (manifest.marketData !== undefined) {
+      issues.push(
+        makeIssue(
+          'lifecycle_form_invalid',
+          'overlay не может объявлять marketData — поле принадлежит форме event_driven, overlay перехватывает решение single_position',
+          '/marketData',
+        ),
+      );
     }
   }
 

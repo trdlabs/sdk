@@ -47,6 +47,10 @@
           },
           "description": "083 S1 задача 3 — объявленные требования к рыночным данным (закрытый каталог `kind`, `MarketDataRequirement`). Стратегия объявляет СМЫСЛ данных, а не место их покупки: поля провайдера здесь НЕТ и не будет — конкретный источник выбирает host/run plan цепочкой `MarketDataRequirement → SubscriptionBinding → ProviderAdapter → канонические market events`.\n\nОпционально для обратной совместимости с манифестами `017.1`–`017.3` (у них этого поля не было и не могло быть). ОБЯЗАТЕЛЬНО (непустой массив) при `lifecycle: 'event_driven'` — `missing_market_data_requirement`, `validate-module.ts`: без объявленных требований актор не может получить ни одного рыночного события, а это гарантированная ошибка конфигурации, не валидный edge-case."
         },
+        "warmup": {
+          "$ref": "#/definitions/ActorWarmupSource",
+          "description": "083 S1 задача 3 (раунд правок 2, С-2) — выбор источника прогрева актора (см. `ActorWarmupSource`). Требование 6 фиксирует его «В КОНТРАКТЕ, а не при деплое»: без поля ЗДЕСЬ выбор фактически делался бы на деплое (то, что требование прямо запрещает), несмотря на то что сам тип уже существует. Опционально: реализация прогрева — S2, поле пока декларативно."
+        },
         "paramsSchema": {
           "type": "object",
           "description": "Произвольная JSON Schema объявленных параметров (FR-034)."
@@ -150,24 +154,28 @@
     "CandlesMarketDataRequirement": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "candles"
-        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли среди требований одного манифеста (`invalid_market_data_requirement` / `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше."
         },
         "instrument": {
           "$ref": "#/definitions/InstrumentRef"
         },
         "interval": {
-          "$ref": "#/definitions/DurationUs"
+          "$ref": "#/definitions/DurationUs",
+          "description": "Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не описывает никакой реальный поток данных."
         },
         "lookback": {
-          "type": "number"
+          "type": "number",
+          "description": "Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1 отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и голый `number` без названной единицы был бы той же двусмысленностью."
         },
         "revisionPolicy": {
-          "$ref": "#/definitions/RevisionPolicy"
+          "$ref": "#/definitions/RevisionPolicy",
+          "description": "Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8). Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше."
+        },
+        "kind": {
+          "type": "string",
+          "const": "candles"
         },
         "priceType": {
           "type": "string",
@@ -175,12 +183,11 @@
         }
       },
       "required": [
-        "kind",
         "id",
         "instrument",
         "interval",
+        "kind",
         "lookback",
-        "revisionPolicy",
         "priceType"
       ],
       "additionalProperties": false,
@@ -236,57 +243,60 @@
           "additionalProperties": false
         }
       ],
-      "description": "Capability-политика ревизий значения (требование 4 задачи 3). В v1 валидатор принимает ТОЛЬКО `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — не потому что данные невозможны, а потому что `provisional_and_revisions` НЕ РЕАЛИЗОВАН в v1 (это единственная из трёх v1-отклонений задачи 3, которая — политика/дорожная карта, а не свойство архива; funding-settlement и `scope:'venue'` ниже — наоборот, свойство архива, см. их док-комментарии). Поле входит в форму СРАЗУ, чтобы будущая реализация ревизий не потребовала ломающего добавления поля — симметрично тому, как `ObservedValue.finality`/`revision` уже несёт оба поля в v1."
+      "description": "Capability-политика ревизий значения (требование 4 задачи 3). В v1 валидатор принимает ТОЛЬКО `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — СВОЙСТВО АРХИВА, а не дорожная карта (раунд правок 2, С-1: прежняя формулировка «не реализовано в v1» была ошибкой брифа, владелец поправил прозой — governs проза, инлайн-комментарий кода ей противоречил).\n\nПричина буквально: колонок `finality`/`revision` в архиве нет — строка одна на `(minute_ts, symbol)`, второй записи с тем же ключом физически негде лежать. Провизорного случая в данных к тому же не существует вовсе: прогнозная funding rate, наблюдавшаяся в минуту T, — окончательная запись факта «в T провайдер показывал X»; смена прогноза в T+1 — НОВОЕ point observation, а не ревизия T. Поле входит в форму СРАЗУ (не отклоняется вовсе на уровне типа), чтобы появление колонок ревизий не потребовало ломающего добавления поля — симметрично тому, как `ObservedValue.finality`/`revision` уже несёт оба поля в v1."
     },
     "OpenInterestMarketDataRequirement": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "open_interest"
-        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли среди требований одного манифеста (`invalid_market_data_requirement` / `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше."
         },
         "instrument": {
           "$ref": "#/definitions/InstrumentRef"
         },
         "interval": {
-          "$ref": "#/definitions/DurationUs"
+          "$ref": "#/definitions/DurationUs",
+          "description": "Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не описывает никакой реальный поток данных."
         },
         "lookback": {
-          "type": "number"
+          "type": "number",
+          "description": "Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1 отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и голый `number` без названной единицы был бы той же двусмысленностью."
         },
         "revisionPolicy": {
-          "$ref": "#/definitions/RevisionPolicy"
+          "$ref": "#/definitions/RevisionPolicy",
+          "description": "Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8). Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше."
+        },
+        "kind": {
+          "type": "string",
+          "const": "open_interest"
         },
         "scope": {
-          "$ref": "#/definitions/Scope"
+          "$ref": "#/definitions/MarketDataScope"
         },
         "unit": {
           "$ref": "#/definitions/MarketDataUnit"
         }
       },
       "required": [
-        "kind",
         "id",
         "instrument",
         "interval",
+        "kind",
         "lookback",
-        "revisionPolicy",
         "scope",
         "unit"
       ],
       "additionalProperties": false,
       "description": "Open interest — point observation (см. `MarketOpenInterestObservedEvent`, задача 2)."
     },
-    "Scope": {
+    "MarketDataScope": {
       "type": "string",
       "enum": [
         "venue",
         "aggregate"
       ],
-      "description": "Область агрегации значения. Тип ОСТАЁТСЯ двузначным, чтобы будущее добавление `'venue'` не было ломающим изменением формы — но валидатор в v1 (`validate-module.ts`) ОТВЕРГАЕТ `'venue'`, а не молча не находит данные (`unsupported_market_data_scope`).\n\nРешение владельца 2026-08-06, обе причины — свойство данных, НЕ временный пробел реализации: (1) ликвидационный каскад — явление РЫНОЧНОЕ, а не биржевое, и агрегат по восьми биржам ловит его полнее и раньше любой отдельной книги; стакан этот контракт не моделирует (исполнение — worst-case барными филлами), поэтому отсутствие `'venue'` дырок в модели не создаёт; (2) архив по-источниковых (per-venue) значений НЕ хранит и хранить НЕ будет — это не вопрос приоритета."
+      "description": "Область агрегации значения. Тип ОСТАЁТСЯ двузначным, чтобы будущее добавление `'venue'` не было ломающим изменением формы — но валидатор в v1 (`validate-module.ts`) ОТВЕРГАЕТ `'venue'`, а не молча не находит данные (`unsupported_market_data_scope`).\n\nРешение владельца 2026-08-06, обе причины — СВОЙСТВО АРХИВА, не временный пробел реализации: (1) ликвидационный каскад — явление РЫНОЧНОЕ, а не биржевое, и агрегат по восьми биржам ловит его полнее и раньше любой отдельной книги; стакан этот контракт не моделирует (исполнение — worst-case барными филлами), поэтому отсутствие `'venue'` дырок в модели не создаёт; (2) архив по-источниковых (per-venue) значений НЕ хранит и хранить НЕ будет — это не вопрос приоритета.\n\nНазвано `MarketDataScope`, а не голым `Scope` — пакет прямо сейчас разгребает коллизию имён вокруг `MarketDataKind` (раунд правок 2, С-3/К-2); бронировать ещё одно предельно общее слово в публичной поверхности значило бы плодить тот же класс проблемы намеренно."
     },
     "MarketDataUnit": {
       "type": "string",
@@ -300,36 +310,39 @@
     "LiquidationsMarketDataRequirement": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "liquidations"
-        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли среди требований одного манифеста (`invalid_market_data_requirement` / `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше."
         },
         "instrument": {
           "$ref": "#/definitions/InstrumentRef"
         },
         "interval": {
-          "$ref": "#/definitions/DurationUs"
+          "$ref": "#/definitions/DurationUs",
+          "description": "Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не описывает никакой реальный поток данных."
         },
         "lookback": {
-          "type": "number"
+          "type": "number",
+          "description": "Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1 отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и голый `number` без названной единицы был бы той же двусмысленностью."
         },
         "revisionPolicy": {
-          "$ref": "#/definitions/RevisionPolicy"
+          "$ref": "#/definitions/RevisionPolicy",
+          "description": "Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8). Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше."
+        },
+        "kind": {
+          "type": "string",
+          "const": "liquidations"
         },
         "scope": {
-          "$ref": "#/definitions/Scope"
+          "$ref": "#/definitions/MarketDataScope"
         }
       },
       "required": [
-        "kind",
         "id",
         "instrument",
         "interval",
+        "kind",
         "lookback",
-        "revisionPolicy",
         "scope"
       ],
       "additionalProperties": false,
@@ -338,39 +351,42 @@
     "TakerVolumeMarketDataRequirement": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "taker_volume"
-        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли среди требований одного манифеста (`invalid_market_data_requirement` / `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше."
         },
         "instrument": {
           "$ref": "#/definitions/InstrumentRef"
         },
         "interval": {
-          "$ref": "#/definitions/DurationUs"
+          "$ref": "#/definitions/DurationUs",
+          "description": "Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не описывает никакой реальный поток данных."
         },
         "lookback": {
-          "type": "number"
+          "type": "number",
+          "description": "Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1 отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и голый `number` без названной единицы был бы той же двусмысленностью."
         },
         "revisionPolicy": {
-          "$ref": "#/definitions/RevisionPolicy"
+          "$ref": "#/definitions/RevisionPolicy",
+          "description": "Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8). Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше."
+        },
+        "kind": {
+          "type": "string",
+          "const": "taker_volume"
         },
         "scope": {
-          "$ref": "#/definitions/Scope"
+          "$ref": "#/definitions/MarketDataScope"
         },
         "unit": {
           "$ref": "#/definitions/MarketDataUnit"
         }
       },
       "required": [
-        "kind",
         "id",
         "instrument",
         "interval",
+        "kind",
         "lookback",
-        "revisionPolicy",
         "scope",
         "unit"
       ],
@@ -380,27 +396,31 @@
     "FundingMarketDataRequirement": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "funding"
-        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли среди требований одного манифеста (`invalid_market_data_requirement` / `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше."
         },
         "instrument": {
           "$ref": "#/definitions/InstrumentRef"
         },
         "interval": {
-          "$ref": "#/definitions/DurationUs"
+          "$ref": "#/definitions/DurationUs",
+          "description": "Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не описывает никакой реальный поток данных."
         },
         "lookback": {
-          "type": "number"
+          "type": "number",
+          "description": "Сколько истории проекция ядра ОБЯЗАНА держать, В ЕДИНИЦАХ `interval` — то есть число шагов длиной `interval` назад от текущего момента, а не µs и не абстрактных «баров». Валидатор в v1 отвергает нецелое или отрицательное значение (`invalid_market_data_requirement`): тот же файл заводит бранд-типы специально ради того, чтобы забытая единица не была исполняемым кодом, и голый `number` без названной единицы был бы той же двусмысленностью."
         },
         "revisionPolicy": {
-          "$ref": "#/definitions/RevisionPolicy"
+          "$ref": "#/definitions/RevisionPolicy",
+          "description": "Capability-политика ревизий (см. `RevisionPolicy`). ОПЦИОНАЛЬНО: отсутствие равносильно `{ mode: 'final_only' }` — единственному законному значению в v1 (раунд правок 2, м-8). Обязательное поле с одним легальным значением заставляло бы каждый манифест — включая написанные LLM — нести шаблонный блок без единой степени свободы; гарантия та же, шума меньше."
+        },
+        "kind": {
+          "type": "string",
+          "const": "funding"
         },
         "scope": {
-          "$ref": "#/definitions/Scope"
+          "$ref": "#/definitions/MarketDataScope"
         },
         "form": {
           "type": "string",
@@ -411,17 +431,47 @@
         }
       },
       "required": [
-        "kind",
+        "form",
         "id",
         "instrument",
         "interval",
+        "kind",
         "lookback",
-        "revisionPolicy",
-        "scope",
-        "form"
+        "scope"
       ],
       "additionalProperties": false,
-      "description": "Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent` — на уровне СОБЫТИЯ они структурно неотличимы, различение живёт на ПОДПИСКЕ, то есть здесь).\n\n`form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — НЕ потому что это временно не реализовано, а потому что соответствующего датасета ФИЗИЧЕСКИ не существует: в архиве нет колонки settlement. Это свойство архива, а не политика — как только появится колонка, `form: 'settlement'` резолвится без изменения формы этого типа."
+      "description": "Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent` — на уровне СОБЫТИЯ они структурно неотличимы, различение живёт на ПОДПИСКЕ, то есть здесь).\n\n`form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — СВОЙСТВО АРХИВА: колонки settlement в архиве физически нет. Как только появится колонка, `form: 'settlement'` резолвится без изменения формы этого типа."
+    },
+    "ActorWarmupSource": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tape_replay"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "kernel_prefetch"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Источник прогрева актора ДО первого торгового бара (требование 6 задачи 3). Выбор фиксируется В КОНТРАКТЕ, а НЕ на деплое: от него зависит, что именно актор успеет увидеть до готовности — то есть детерминизм первого торгующего бара. Реализации прогрева здесь НЕТ (S2); тип фиксирует только сам выбор.\n\n- `tape_replay` — прогрев реплеем исторической ленты: актор строит проекции/состояние из уже   прошедших событий так, как если бы они доставлялись в реальном времени.\n- `kernel_prefetch` — прогрев префетчем ядра: движок материализует нужное окно истории и   передаёт готовое состояние без пере-проигрывания событий через `onEvent`."
     },
     "CapabilityDeclaration": {
       "type": "object",

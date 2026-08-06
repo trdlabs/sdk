@@ -34,6 +34,16 @@ export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3'] as const;
  * 023 — замкнутый каталог поддержанных point-in-time рыночных kind'ов (research R4/R5). Объявленный
  * `dataNeeds`-флаг вне объединения этого каталога со structural/lookahead/nondeterminism-наборами →
  * `unsupported_market_data_kind`. Аналог `METRIC_CATALOG`/`unknown_metric`.
+ *
+ * ЭТО активная копия: именно она (через `platformContractContext().supportedMarketDataKinds`)
+ * реально ведёт проверку `unsupported_market_data_kind` в `validate-module.ts` — доказано
+ * ошибкой раунда правок 1 (м-4): `@deprecated`-пометка тогда легла на близнеца в
+ * `contract/constants.ts`, который только РЕЭКСПОРТИРУЕТСЯ наружу (`src/index.ts`) и валидацию не
+ * ведёт. `MarketDataKind`/`MARKET_DATA_KINDS` (contract/constants.ts) — ДРУГОЙ, snake_case,
+ * пятизначный каталог для `MarketDataRequirement` (083 S1 задача 3, форма `event_driven`); эта
+ * camelCase-четвёрка с ним никак не связана и не заменяется им — обслуживает легаси
+ * `DataNeedsDeclaration`-флаги манифестов `017.1`–`017.3`, где остаётся действующим механизмом,
+ * не устаревшим.
  */
 export const SUPPORTED_MARKET_DATA_KINDS = [
   'openInterest',

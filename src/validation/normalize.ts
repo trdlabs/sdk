@@ -14,6 +14,7 @@ import type {
 } from '../research-contract/module.js';
 import {
   DEFAULT_STRATEGY_LIFECYCLE,
+  type ActorWarmupSource,
   type MarketDataRequirement,
   type StrategyLifecycle,
 } from '../research-contract/event-driven.js';
@@ -66,6 +67,11 @@ export interface NormalizedManifest {
    * проекции, которую видит downstream runner.
    */
   readonly marketData?: readonly MarketDataRequirement[];
+  /**
+   * 083 S1 задача 3 (раунд правок 2, С-2) — объявленный `warmup`, только если задан (та же
+   * дисциплина, что `marketData`/`lifecycle` выше).
+   */
+  readonly warmup?: ActorWarmupSource;
 }
 
 function declaredFlags(
@@ -111,9 +117,9 @@ export function normalizeManifest(manifest: ModuleManifest): NormalizedManifest 
       : base;
   const withLifecycle: NormalizedManifest =
     manifest.lifecycle !== undefined ? { ...withKind, lifecycle: manifest.lifecycle } : withKind;
-  return manifest.marketData !== undefined
-    ? { ...withLifecycle, marketData: manifest.marketData }
-    : withLifecycle;
+  const withMarketData: NormalizedManifest =
+    manifest.marketData !== undefined ? { ...withLifecycle, marketData: manifest.marketData } : withLifecycle;
+  return manifest.warmup !== undefined ? { ...withMarketData, warmup: manifest.warmup } : withMarketData;
 }
 
 /**

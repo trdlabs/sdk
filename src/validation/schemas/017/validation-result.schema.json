@@ -99,6 +99,8 @@
         "unsupported_revision_policy",
         "unsupported_funding_form",
         "dataset_boundary_violation",
+        "invalid_market_data_requirement",
+        "duplicate_market_data_requirement_id",
         "empty_baseline_variant_diff"
       ],
       "description": "Полная таксономия машиночитаемых кодов валидации (data-model §13.2). Error-коды блокируют приём; warning-коды — нет."

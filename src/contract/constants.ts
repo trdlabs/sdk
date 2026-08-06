@@ -14,11 +14,15 @@ export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3'] as const;
 /**
  * @deprecated Legacy-каталог (research 023/027/028): camelCase, четыре вида, свечей нет. Это
  * набор ДЛЯ `DataNeedsDeclaration` — булевых flag'ов point-in-time потребностей манифестов
- * `017.1`–`017.3` (`unsupported_market_data_kind`, `validate-module.ts`), а НЕ каталог видов
- * `MarketDataRequirement` (083 S1 задача 3, `event_driven`). Эти два каталога были названы
- * почти одинаково и путались местами — отсюда `@deprecated`: имя сохранено байт-в-байт (по нему
- * валидируются существующие манифесты, удалять нельзя), но оно больше НЕ единственный источник
- * истины о «видах рыночных данных» в этом пакете. Новый каталог — `MARKET_DATA_KINDS` ниже.
+ * `017.1`–`017.3`, а НЕ каталог видов `MarketDataRequirement` (083 S1 задача 3, `event_driven`).
+ *
+ * Эта КОПИЯ здесь — только реэкспорт наружу (`src/index.ts`); валидацию `unsupported_market_data_kind`
+ * фактически ведёт ОТДЕЛЬНАЯ, независимо объявленная копия того же массива в
+ * `research-contract/catalogs.ts` (через `platformContractContext().supportedMarketDataKinds` →
+ * `validate-module.ts`) — доверять этому файлу как источнику поведения валидатора неверно (раунд
+ * правок 1 ошибочно сделал именно это; исправлено). Имя `SUPPORTED_MARKET_DATA_KINDS` сохранено
+ * байт-в-байт в ОБЕИХ копиях — удалять нельзя, но оно больше НЕ единственный источник истины о
+ * «видах рыночных данных» в этом пакете. Новый каталог — `MARKET_DATA_KINDS` ниже.
  */
 export const SUPPORTED_MARKET_DATA_KINDS = [
   'openInterest',

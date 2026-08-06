@@ -3,7 +3,7 @@
 
 import type { OverlayDecision, StrategyDecision } from './decision.js';
 import type { StrategyContext } from './context.js';
-import type { MarketDataRequirement, StrategyLifecycle } from './event-driven.js';
+import type { ActorWarmupSource, MarketDataRequirement, StrategyLifecycle } from './event-driven.js';
 import type { Ref } from './run.js';
 
 /** Статус неизменяемой версии модуля; forward-only автомат (data-model §14). */
@@ -111,6 +111,13 @@ export interface ModuleManifest {
    * валидный edge-case.
    */
   readonly marketData?: readonly MarketDataRequirement[];
+  /**
+   * 083 S1 задача 3 (раунд правок 2, С-2) — выбор источника прогрева актора (см.
+   * `ActorWarmupSource`). Требование 6 фиксирует его «В КОНТРАКТЕ, а не при деплое»: без поля
+   * ЗДЕСЬ выбор фактически делался бы на деплое (то, что требование прямо запрещает), несмотря на
+   * то что сам тип уже существует. Опционально: реализация прогрева — S2, поле пока декларативно.
+   */
+  readonly warmup?: ActorWarmupSource;
   /** Произвольная JSON Schema объявленных параметров (FR-034). */
   readonly paramsSchema: object;
   /** Payload параметров (валидируется против `paramsSchema`). */

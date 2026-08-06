@@ -1,6 +1,6 @@
 // 083 S1 задача 3 — `MarketDataRequirement`: закрытый каталог рыночных данных на пять видов.
 //
-// Что здесь пинуется:
+// Что здесь пинуется (раунд правок 1):
 //   1) двусторонняя типовая гарантия «MARKET_DATA_KINDS ⇔ MarketDataRequirement['kind']»
 //      (exhaustiveness) — типовая проверка, а не рантаймовая (нужен `npx tsc --noEmit`, `tsx`
 //      типы стирает, как и в `actor-market-events.test.ts`);
@@ -13,6 +13,18 @@
 //      `event_driven` без `marketData` — нет (обязательность поля, требование 7).
 // Item 8 (существующий `test/event-driven.test.ts` остаётся зелёным) проверяется отдельным
 // прогоном этого же файла — здесь не дублируется.
+//
+// Раунд правок 2 (ревью нашло К-1/К-3/К-4/К-5/С-1/С-2/С-3/м-1/м-2/м-3/м-4/м-5/м-7/м-8) добавил:
+//   К-1 marketData тоже ограждена версией контракта (017.1/017.2 + marketData → rejected);
+//   К-4 три закрытые оси (scope/revisionPolicy.mode/funding.form) — белый список, проверено
+//       произвольным неизвестным значением, не только буквальным 'venue'/…/'settlement';
+//   К-5 дубль `id` внутри `marketData` одного манифеста отвергается;
+//   м-1 числовые/строковые границы (lookback/interval/id/instrument) — не только присутствие;
+//   м-7 overlay с marketData отвергается (поле принадлежит форме event_driven);
+//   м-8 revisionPolicy опционален — отсутствие равносильно final_only;
+//   С-2 warmup — объявлен в ModuleManifest, принимается и доезжает до normalized;
+//   С-3/К-2 MARKET_DATA_KINDS/MarketDataKind достижимы из барреля research-contract, не только
+//       из contract/constants напрямую; MarketDataScope — новое имя Scope (м-5).
 // Run: npx tsx --test test/market-data-requirement.test.ts
 // Type-check (обязателен для пункта 1): npx tsc --noEmit
 import { test } from 'node:test';
@@ -20,6 +32,7 @@ import assert from 'node:assert/strict';
 
 import { MARKET_DATA_KINDS, type MarketDataKind } from '../src/contract/constants.js';
 import {
+  MARKET_DATA_KINDS as MARKET_DATA_KINDS_VIA_BARREL,
   durationUs,
   platformContractContext,
   timestampUs,
@@ -27,6 +40,7 @@ import {
   type ActorWarmupSource,
   type DeclaredDatasetSplice,
   type MarketDataRequirement,
+  type MarketDataScope,
   type ModuleManifest,
 } from '../src/research-contract/index.js';
 import { ALL_VALIDATION_CODES, validate } from '../src/validation/index.js';
@@ -292,4 +306,221 @@ test('ActorReadiness/ActorWarmupSource — форма выбора прогре�
   const prefetch: ActorWarmupSource = { kind: 'kernel_prefetch' };
   assert.equal(readiness, 'warming_up');
   assert.deepEqual([replay.kind, prefetch.kind], ['tape_replay', 'kernel_prefetch']);
+});
+
+test('С-2: warmup объявлен В КОНТРАКТЕ (ModuleManifest), принимается и доезжает до normalized', () => {
+  const warmup: ActorWarmupSource = { kind: 'tape_replay' };
+  const res = check({ ...BASE, warmup });
+  assert.equal(res.status, 'accepted', JSON.stringify(res.issues));
+  assert.deepEqual((res.normalized as { warmup?: unknown }).warmup, warmup);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — К-1: marketData тоже часть surface 083 E1/S1, ограждена версией контракта.
+// Репро ревью: манифест 017.1 с hooks:['onBarClose'] и блоком marketData раньше принимался с
+// нулём issues — версия конверта переставала говорить, какой surface объявлен.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('К-1: marketData под контрактом 017.1/017.2 отвергается — surface введён в 017.3', () => {
+  for (const contractVersion of ['017.1', '017.2'] as const) {
+    const manifest: ModuleManifest = {
+      id: 'm3',
+      version: '0.1.0',
+      kind: 'strategy',
+      name: 'M3',
+      summary: 's',
+      rationale: 'r',
+      author: 'agent',
+      contractVersion,
+      status: 'research_only',
+      paramsSchema: { type: 'object', additionalProperties: false, properties: {} },
+      capabilities: { platformSdk: true },
+      dataNeeds: {},
+      hooks: ['onBarClose'],
+      marketData: [CANDLES_REQ],
+    };
+    const res = check(manifest);
+    assert.equal(res.status, 'rejected', contractVersion);
+    assert.ok(
+      res.issues.some((i) => i.code === 'unsupported_contract_version' && i.path === '/contractVersion'),
+      `${contractVersion}: ${JSON.stringify(res.issues)}`,
+    );
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — К-4: белый список вместо чёрного. Произвольное третье значение отвергается,
+// не только буквально 'venue' / 'provisional_and_revisions' / 'settlement'.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('К-4: scope с произвольным неизвестным значением отвергается (белый список)', () => {
+  const oi = {
+    ...CANDLES_REQ,
+    kind: 'open_interest',
+    scope: 'city',
+    unit: 'usd',
+  } as unknown as MarketDataRequirement;
+  const res = check({ ...BASE, marketData: [oi] });
+  assert.equal(res.status, 'rejected');
+  assert.ok(res.issues.some((i) => i.code === 'unsupported_market_data_scope'), JSON.stringify(res.issues));
+});
+
+test('К-4: revisionPolicy.mode с произвольным неизвестным значением отвергается (белый список)', () => {
+  const req = {
+    ...CANDLES_REQ,
+    revisionPolicy: { mode: 'eventually_consistent' },
+  } as unknown as MarketDataRequirement;
+  const res = check({ ...BASE, marketData: [req] });
+  assert.equal(res.status, 'rejected');
+  assert.ok(res.issues.some((i) => i.code === 'unsupported_revision_policy'), JSON.stringify(res.issues));
+});
+
+test('К-4: funding.form с произвольным неизвестным значением отвергается (белый список)', () => {
+  const funding = {
+    kind: 'funding',
+    id: 'req-funding',
+    instrument: INSTRUMENT,
+    interval: durationUs(60_000_000),
+    lookback: 100,
+    scope: 'aggregate',
+    form: 'predicted',
+  } as unknown as MarketDataRequirement;
+  const res = check({ ...BASE, marketData: [funding] });
+  assert.equal(res.status, 'rejected');
+  assert.ok(res.issues.some((i) => i.code === 'unsupported_funding_form'), JSON.stringify(res.issues));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — К-5: дубль id внутри marketData одного манифеста отвергается — id единственная
+// ручка связи требования с binding'ом ниже по цепочке (задача 8).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('К-5: дубль id внутри marketData отвергается', () => {
+  const dup: MarketDataRequirement = {
+    kind: 'liquidations',
+    id: 'req-candles', // тот же id, что у CANDLES_REQ
+    instrument: INSTRUMENT,
+    interval: durationUs(60_000_000),
+    lookback: 30,
+    scope: 'aggregate',
+  };
+  const res = check({ ...BASE, marketData: [CANDLES_REQ, dup] });
+  assert.equal(res.status, 'rejected');
+  assert.ok(
+    res.issues.some((i) => i.code === 'duplicate_market_data_requirement_id' && i.path === '/marketData/1/id'),
+    JSON.stringify(res.issues),
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — м-1: числовые/строковые границы. Ранее принимались отрицательный/дробный
+// lookback, нулевой/отрицательный interval, пустые id/venue/symbol.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('м-1: lookback отрицательный или дробный отвергается', () => {
+  for (const lookback of [-5, 1.5]) {
+    const res = check({ ...BASE, marketData: [{ ...CANDLES_REQ, lookback }] });
+    assert.equal(res.status, 'rejected', String(lookback));
+    assert.ok(
+      res.issues.some((i) => i.code === 'invalid_market_data_requirement' && i.path === '/marketData/0/lookback'),
+      `${lookback}: ${JSON.stringify(res.issues)}`,
+    );
+  }
+});
+
+test('м-1: interval нулевой или отрицательный отвергается', () => {
+  for (const interval of [0, -60_000_000]) {
+    const req = { ...CANDLES_REQ, interval } as unknown as MarketDataRequirement;
+    const res = check({ ...BASE, marketData: [req] });
+    assert.equal(res.status, 'rejected', String(interval));
+    assert.ok(
+      res.issues.some((i) => i.code === 'invalid_market_data_requirement' && i.path === '/marketData/0/interval'),
+      `${interval}: ${JSON.stringify(res.issues)}`,
+    );
+  }
+});
+
+test('м-1: пустой id требования отвергается', () => {
+  const res = check({ ...BASE, marketData: [{ ...CANDLES_REQ, id: '' }] });
+  assert.equal(res.status, 'rejected');
+  assert.ok(
+    res.issues.some((i) => i.code === 'invalid_market_data_requirement' && i.path === '/marketData/0/id'),
+    JSON.stringify(res.issues),
+  );
+});
+
+test('м-1: пустые venue/symbol инструмента отвергаются', () => {
+  const resVenue = check({
+    ...BASE,
+    marketData: [{ ...CANDLES_REQ, instrument: { venue: '', symbol: 'BTCUSDT' } }],
+  });
+  const resSymbol = check({
+    ...BASE,
+    marketData: [{ ...CANDLES_REQ, instrument: { venue: 'binance', symbol: '' } }],
+  });
+  assert.ok(
+    resVenue.issues.some((i) => i.code === 'invalid_market_data_requirement' && i.path === '/marketData/0/instrument/venue'),
+    JSON.stringify(resVenue.issues),
+  );
+  assert.ok(
+    resSymbol.issues.some((i) => i.code === 'invalid_market_data_requirement' && i.path === '/marketData/0/instrument/symbol'),
+    JSON.stringify(resSymbol.issues),
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — м-7: overlay с marketData отвергается — поле принадлежит форме event_driven,
+// overlay перехватывает решение фазовой модели single_position.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('м-7: overlay с marketData отвергается', () => {
+  const overlay: ModuleManifest = {
+    id: 'ov1',
+    version: '0.1.0',
+    kind: 'overlay',
+    name: 'OV',
+    summary: 's',
+    rationale: 'r',
+    author: 'agent',
+    contractVersion: '017.3',
+    status: 'research_only',
+    paramsSchema: { type: 'object', additionalProperties: false, properties: {} },
+    capabilities: { platformSdk: true },
+    dataNeeds: {},
+    hooks: ['apply'],
+    targetStrategyRef: 'm',
+    interceptionPoint: 'post_decision',
+    marketData: [CANDLES_REQ],
+  };
+  const res = validate({ inputKind: 'module', manifest: overlay }, platformContractContext(['m']));
+  assert.equal(res.status, 'rejected');
+  assert.ok(
+    res.issues.some((i) => i.code === 'lifecycle_form_invalid' && i.path === '/marketData'),
+    JSON.stringify(res.issues),
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — м-8: revisionPolicy опционален, отсутствие равносильно final_only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('м-8: revisionPolicy опущен целиком — по умолчанию final_only, принимается', () => {
+  const { revisionPolicy: _unused, ...withoutPolicy } = CANDLES_REQ;
+  void _unused;
+  const res = check({ ...BASE, marketData: [withoutPolicy as MarketDataRequirement] });
+  assert.equal(res.status, 'accepted', JSON.stringify(res.issues));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Раунд правок 2 — С-3/К-2: новый каталог достижим из ДВУХ путей (contract/constants напрямую и
+// research-contract barrel), легаси-каталог переименован, MarketDataScope — новое имя Scope (м-5).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('С-3/К-2: MARKET_DATA_KINDS достижим из research-contract barrel, не только из contract/constants', () => {
+  assert.deepEqual([...MARKET_DATA_KINDS_VIA_BARREL], [...MARKET_DATA_KINDS]);
+});
+
+test('м-5: MarketDataScope — тип доступен под новым именем (переименован из Scope)', () => {
+  const s: MarketDataScope = 'aggregate';
+  assert.equal(s, 'aggregate');
 });

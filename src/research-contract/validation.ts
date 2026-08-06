@@ -45,8 +45,10 @@ export type ValidationCode =
   // `scope: 'venue'` в v1: архив не хранит и не будет хранить по-источниковые значения (свойство
   // данных, не временный пробел — см. doc `Scope`, event-driven.ts).
   | 'unsupported_market_data_scope'
-  // `revisionPolicy.mode` вне `'final_only'` в v1: `provisional_and_revisions` не реализован
-  // (единственное из трёх v1-отклонений задачи 3, которое — дорожная карта, а не свойство архива).
+  // `revisionPolicy.mode` вне `'final_only'` в v1 — СВОЙСТВО АРХИВА (раунд правок 2, С-1: прежняя
+  // формулировка «не реализован» была ошибкой брифа, поправленной владельцем прозой): колонок
+  // finality/revision в архиве нет — строка одна на (minute_ts, symbol), второй записи с тем же
+  // ключом физически негде лежать (см. doc `RevisionPolicy`, event-driven.ts).
   | 'unsupported_revision_policy'
   // `funding` с `form: 'settlement'` в v1: датасета (колонки settlement) в архиве физически нет
   // (свойство данных, не политика — см. doc `FundingMarketDataRequirement`, event-driven.ts).
@@ -54,6 +56,13 @@ export type ValidationCode =
   // Прогон молча пересёк границу `datasetId` без явного `DeclaredDatasetSplice` (требование 5,
   // event-driven.ts). Код зарезервирован для run plan: проверку окна исполняет НЕ sdk.
   | 'dataset_boundary_violation'
+  // Структурная адекватность требования вне того, что выражает JSON Schema (раунд правок 2,
+  // м-1): `lookback`/`interval` не целые/не положительные, `id`/`instrument.venue`/
+  // `instrument.symbol` — пустая строка.
+  | 'invalid_market_data_requirement'
+  // Два требования одного манифеста с одинаковым `id` (раунд правок 2, К-5) — `id` единственная
+  // ручка связи требования с binding'ом ниже по цепочке (задача 8); аналог `duplicate_overlay_ref`.
+  | 'duplicate_market_data_requirement_id'
   // --- warning ---
   | 'empty_baseline_variant_diff';
 
