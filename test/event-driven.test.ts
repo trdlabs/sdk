@@ -299,8 +299,8 @@ test('через границу изолята валидируется БАТЧ
 
 test('неоднозначные команды отклоняются схемой, а не трактуются движком', () => {
   const ambiguous: readonly [string, unknown][] = [
-    ['timer.set без atTs/afterMs', { kind: 'timer.set', timerId: 't' }],
-    ['timer.set сразу с обоими', { kind: 'timer.set', timerId: 't', atTs: 1, afterMs: 2 }],
+    ['timer.set без atTs/afterUs', { kind: 'timer.set', timerId: 't' }],
+    ['timer.set сразу с обоими', { kind: 'timer.set', timerId: 't', atTs: 1, afterUs: 2 }],
     ['limit без price', { kind: 'place', type: 'limit', clientOrderId: 'o', side: 'buy', qtyUsd: 1 }],
     [
       'stop_market без stopPrice',
@@ -332,7 +332,7 @@ test('неоднозначные команды отклоняются схем�
 test('однозначные варианты тех же команд принимаются', () => {
   const wellFormed: readonly unknown[] = [
     { kind: 'timer.set', timerId: 't', atTs: 1 },
-    { kind: 'timer.set', timerId: 't', afterMs: 60_000 },
+    { kind: 'timer.set', timerId: 't', afterUs: 60_000 },
     { kind: 'place', type: 'market', clientOrderId: 'o', side: 'buy', qtyUsd: 1 },
     { kind: 'place', type: 'limit', clientOrderId: 'o', side: 'buy', qtyUsd: 1, price: 5 },
     { kind: 'place', type: 'stop_market', clientOrderId: 'o', side: 'sell', qtyUsd: 1, stopPrice: 4 },

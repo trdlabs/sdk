@@ -237,7 +237,7 @@
           "$ref": "#/definitions/ActorTimerSetAfterCommand"
         }
       ],
-      "description": "Поставить таймер: ЛИБО абсолютный `atTs`, ЛИБО относительный `afterMs` — строго одно из двух. Ни то ни другое (когда будить?) и оба сразу (какое из них истина?) — неоднозначные команды, и обе формы закрыты на уровне схемы, а не соглашением."
+      "description": "Поставить таймер: ЛИБО абсолютный `atTs`, ЛИБО относительный `afterUs` — строго одно из двух. Ни то ни другое (когда будить?) и оба сразу (какое из них истина?) — неоднозначные команды, и обе формы закрыты на уровне схемы, а не соглашением."
     },
     "ActorTimerSetAtCommand": {
       "type": "object",
@@ -250,7 +250,7 @@
           "type": "string"
         },
         "atTs": {
-          "type": "number",
+          "$ref": "#/definitions/TimestampUs",
           "description": "Абсолютный business_ts срабатывания (часы данных, не wall-clock)."
         }
       },
@@ -262,6 +262,10 @@
       "additionalProperties": false,
       "description": "Таймер на абсолютный business_ts."
     },
+    "TimestampUs": {
+      "type": "number",
+      "description": "Момент времени в микросекундах эпохи. Целое, неотрицательное, safe-integer."
+    },
     "ActorTimerSetAfterCommand": {
       "type": "object",
       "properties": {
@@ -272,18 +276,22 @@
         "timerId": {
           "type": "string"
         },
-        "afterMs": {
-          "type": "number",
+        "afterUs": {
+          "$ref": "#/definitions/DurationUs",
           "description": "Смещение от `ts` события, породившего команду."
         }
       },
       "required": [
         "kind",
         "timerId",
-        "afterMs"
+        "afterUs"
       ],
       "additionalProperties": false,
-      "description": "Таймер через `afterMs` от `ts` обрабатываемого события."
+      "description": "Таймер через `afterUs` от `ts` обрабатываемого события."
+    },
+    "DurationUs": {
+      "type": "number",
+      "description": "Длительность в микросекундах. Целое; знак допустим (разность моментов)."
     },
     "ActorTimerCancelCommand": {
       "type": "object",

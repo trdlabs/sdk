@@ -35,7 +35,7 @@ import type {
   TakerReading,
 } from './market-tape.js';
 import type { TimeInForce } from './risk-execution.js';
-import type { TimestampUs } from './time-us.js';
+import type { DurationUs, TimestampUs } from './time-us.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Форма стратегии.
@@ -457,24 +457,30 @@ export interface ActorCancelCommand {
   readonly clientOrderId: string;
 }
 
+// `atTs`/`afterUs` ниже — `TimestampUs`/`DurationUs`, не `number` (раунд правок 1, I-7 продолжение:
+// таймеры — часть поверхности, для которой §3.2 называет µs единственной внутренней единицей,
+// наравне с конвертом, scheduler'ом, execution ledger и canonical trace). `afterMs` переименован в
+// `afterUs`: имя обязано смениться вместе с единицей — `afterMs: DurationUs` врало бы явно, то
+// есть было бы хуже старого поля, а не просто неполной правкой.
+
 /** Таймер на абсолютный business_ts. */
 export interface ActorTimerSetAtCommand {
   readonly kind: 'timer.set';
   readonly timerId: string;
   /** Абсолютный business_ts срабатывания (часы данных, не wall-clock). */
-  readonly atTs: number;
+  readonly atTs: TimestampUs;
 }
 
-/** Таймер через `afterMs` от `ts` обрабатываемого события. */
+/** Таймер через `afterUs` от `ts` обрабатываемого события. */
 export interface ActorTimerSetAfterCommand {
   readonly kind: 'timer.set';
   readonly timerId: string;
   /** Смещение от `ts` события, породившего команду. */
-  readonly afterMs: number;
+  readonly afterUs: DurationUs;
 }
 
 /**
- * Поставить таймер: ЛИБО абсолютный `atTs`, ЛИБО относительный `afterMs` — строго одно из двух.
+ * Поставить таймер: ЛИБО абсолютный `atTs`, ЛИБО относительный `afterUs` — строго одно из двух.
  * Ни то ни другое (когда будить?) и оба сразу (какое из них истина?) — неоднозначные команды,
  * и обе формы закрыты на уровне схемы, а не соглашением.
  */
