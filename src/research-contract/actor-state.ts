@@ -1,15 +1,17 @@
-// 083 S1 — задача 5: авторский state-слот актора, execution ledger, вывод `PositionView` из него.
+// 083 S1 — задача 5: execution ledger, вывод `PositionView` из него.
 //
 // Спека: control-center `docs/superpowers/specs/2026-08-04-event-driven-actor-contract-design.md`
 // (см. `.superpowers/sdd/2026-08-06-s1-actor-contract/task-5-brief.md`).
 //
-// Модуль — СОСЕД `event-driven.ts` (где живёт `ActorContext`/`PositionView`/`OpenOrderView`), не
-// его часть. Зависимость — только В ОДНУ СТОРОНУ: этот файл импортирует `OrderSide`/`PositionView`
-// ОТТУДА (типы), обратного импорта нет — та же дисциплина, что у `observation-status.ts`
-// (см. шапку того файла): `event-driven.ts` НЕ импортирует ничего отсюда, только использует имена
-// `PositionView`/`OpenOrderView`, которые сам же и объявляет. Кольца зависимостей поэтому нет,
-// хотя обе стороны концептуально связаны (`ActorContext.position()` возвращает ровно то, что
-// `derivePositionView` ниже вычисляет из ledger'а).
+// Модуль — СОСЕД `event-driven.ts` (где живёт `ActorContext`/`PositionView`/`OpenOrderView`/
+// `ActorStateValue`/`isPlainActorState`), не его часть. Зависимость — только В ОДНУ СТОРОНУ: этот
+// файл импортирует `OrderSide`/`PositionView` ОТТУДА (типы), обратного импорта нет — та же
+// дисциплина, что у `observation-status.ts` (см. шапку того файла): `event-driven.ts` НЕ
+// импортирует ничего отсюда. Ревью раунда 1 (I-3) первоначально просило завести канал для
+// авторского state-слота на `StrategyActor`/`ActorInit` — оба живут в `event-driven.ts`, поэтому
+// `ActorStateValue`/`isPlainActorState` ПЕРЕЕХАЛИ туда же (были здесь в первой версии этого файла):
+// оставлять их тут и заводить обратный импорт `event-driven.ts ⇐ actor-state.ts` замкнуло бы
+// кольцо зависимостей поверх уже существующего `actor-state.ts ⇒ event-driven.ts`.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // Что это НЕ. «Только формы и определения. Никакой реализации» (Global Constraint брифа задачи).
@@ -23,94 +25,12 @@
 // поступления событий, персистит его через чекпойнт изолята и вызывает эту проекцию на каждый
 // `ctx.position()` — задача `@trdlabs/engine`, S2. Разница ровно та же, что между «функция сложения
 // определена» и «калькулятор с этой функцией собран, подключён к сети и работает 24/7».
+// Проверка ВХОДА (`isExecutionLedgerEntry` ниже, ревью раунда 1, I-5) в это разделение НЕ
+// противоречит: «форма, не реализация» — про то, ЧТО функция делает с данными (не ведёт учёт сама),
+// а не про то, доверяет ли она форме данных, которые ей передали через недоверенную JSON-границу.
 
+import { isTimestampUs, type TimestampUs } from './time-us.js';
 import type { OrderSide, PositionView } from './event-driven.js';
-import type { TimestampUs } from './time-us.js';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Авторский state-слот (требование 1) — plain-data, проверяется РАНТАЙМОМ, не только типом.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Почему нужен рантайм-валидатор, а не только тип. Слот — собственное состояние актора МЕЖДУ
-// вызовами `onEvent` (например: скользящие суммы, счётчики, ручные индикаторы, которые автору
-// проще держать сам, чем пересчитывать из истории на каждый вызов). Состояние ОБЯЗАНО пережить
-// чекпойнт и восстановление изолята (сбой хоста, миграция, холодный рестарт после простоя) — то
-// есть обязано пройти через JSON туда и обратно байт-в-байт. Замыкание (функция, захватившая
-// внешние переменные) сериализуется в `{}` или бросает при `JSON.stringify` — тип TS `unknown`/
-// generic-параметр НЕ может отличить «этот объект переживёт сериализацию» от «этот объект выглядит
-// как данные, но внутри держит функцию» на этапе компиляции: сериализуемость — рантайм-свойство
-// КОНКРЕТНОГО значения, а не структурное свойство его статического типа (объект с полем-функцией
-// типизируется нормально, `JSON.stringify` его не отвергнет — молча уронит поле или превратит в
-// `undefined`). Отсюда — `isPlainActorState` ниже: единственный способ поймать «это не переживёт
-// границу» ДО того, как оно эту границу попытается пересечь.
-
-/**
- * Значение, законное в авторском state-слоте актора. Рекурсивный plain-data union — ровно то
- * подмножество JS-значений, что `JSON.parse(JSON.stringify(x))` восстанавливает БЕЗ потерь и без
- * молчаливых искажений (в отличие, например, от объекта с ключом `undefined`-значения, который
- * `JSON.stringify` тихо роняет, или от `Date`, который превращается в строку и теряет тип).
- *
- * Явно ЗАКРЫТ на верхнем уровне: `null`/`boolean`/`string`/конечное `number`/массив/plain-объект.
- * `NaN`/`Infinity` не входят (типовое ограничение `number` их не исключает, но `isPlainActorState`
- * отклоняет их рантаймом — та же дисциплина, что `isTimestampUs`/`isDurationUs` в `time-us.ts`:
- * тип называет НАМЕРЕНИЕ, рантайм-предикат его проверяет на недоверенном значении).
- */
-export type ActorStateValue =
-  | null
-  | boolean
-  | string
-  | number
-  | readonly ActorStateValue[]
-  | { readonly [key: string]: ActorStateValue };
-
-/**
- * Рекурсивный обход с отслеживанием ТЕКУЩЕГО ПУТИ предков (не всех когда-либо посещённых узлов):
- * `ancestors` пополняется ПЕРЕД рекурсией в потомков и очищается ПОСЛЕ (backtracking) — так
- * отличается настоящий ЦИКЛ (узел ссылается сам на себя через цепочку потомков) от легитимного
- * ДИАМАНТА (два разных поля указывают на ОДИН И ТОТ ЖЕ вложенный объект, но не по кругу: JSON это
- * прекрасно сериализует, просто теряя разделяемую идентичность, что для plain-data не является
- * пороком). Глобальный «посещённый» `Set` без backtracking спутал бы диамант с циклом и отклонял
- * бы законные значения.
- */
-function isPlainDataValue(value: unknown, ancestors: ReadonlySet<object>): boolean {
-  if (value === null) return true;
-  const t = typeof value;
-  if (t === 'string' || t === 'boolean') return true;
-  if (t === 'number') return Number.isFinite(value as number);
-  // function/symbol/bigint/undefined — НЕ plain-data. `undefined` внутри структуры (не как
-  // отсутствующий ключ, а как явное значение) тоже отклонён: `JSON.stringify` роняет такие ключи
-  // молча, то есть значение до/после границы JSON — уже не одно и то же значение.
-  if (t !== 'object') return false;
-
-  if (ancestors.has(value as object)) return false; // настоящий цикл — см. doc выше.
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(value as object);
-
-  if (Array.isArray(value)) {
-    return value.every((item) => isPlainDataValue(item, nextAncestors));
-  }
-
-  // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
-  // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
-  // тоже должен проходить). Белый список (rule: валидаторы — белым списком, не чёрным): вместо
-  // перечисления запрещённых конструкторов (который расширяющийся JS никогда не даст исчерпать)
-  // проверяется РОВНО принадлежность к двум разрешённым формам прототипа.
-  const proto = Object.getPrototypeOf(value as object);
-  if (proto !== Object.prototype && proto !== null) return false;
-
-  return Object.values(value as Record<string, unknown>).every((v) => isPlainDataValue(v, nextAncestors));
-}
-
-/**
- * Рантайм-проверка формы авторского state-слота (требование 1). Отвергает: функции (прямые и как
- * значения полей — то есть замыкания, раз JS не различает «функцию» и «замыкание» на уровне
- * значения), циклические ссылки, `symbol`/`bigint`/`undefined`-в-структуре, `NaN`/`Infinity`,
- * экзотические объекты (`Date`/`Map`/`Set`/класс-инстанс). Принимает вложенную структуру из
- * `null`/`boolean`/`string`/конечных `number`/массивов/plain-объектов любой глубины.
- */
-export function isPlainActorState(value: unknown): value is ActorStateValue {
-  return isPlainDataValue(value, new Set());
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ЗАПРЕТ: контракт не заводит поля вида `tp1Done`/`tp2Done`/`breakEvenArmed` (требование 5).
@@ -142,9 +62,15 @@ export function isPlainActorState(value: unknown): value is ActorStateValue {
  * обращаясь за стороной заявки в какое-то другое хранилище, которое могло уже забыть заявку.
  *
  * `qty` — ВСЕГДА положительный размер исполнения в базовой валюте; знак движения позиции несёт
- * `side`, не `qty` (симметрично `ActorFillEvent.qty`). `fee` — комиссия ЭТОГО исполнения
- * (требование 4: «комиссии» фиксируются здесь, не отдельной сущностью — комиссия существует
- * только КАК СВОЙСТВО конкретного филла, у неё нет самостоятельного бытия без него).
+ * `side`, не `qty` (симметрично `ActorFillEvent.qty`). ТИП это не запрещает (`{qty:-3}`
+ * типизируется — ревью раунда 1, M-4) — `isExecutionLedgerFillEntry` ниже проверяет это рантаймом,
+ * та же дисциплина, что `isValidRevisionNumber` в `observation-status.ts`.
+ *
+ * `fee` — комиссия ЭТОГО исполнения, В ВАЛЮТЕ КОТИРОВКИ инструмента (той же, что `qtyUsd`
+ * `ActorPlaceCommand` — НЕ в базовой валюте, которой измеряется `qty`; ревью раунда 1, M-3: файл в
+ * остальном одержим единицами, у этого поля единица была неявной). Требование 4: «комиссии»
+ * фиксируются здесь, не отдельной сущностью — комиссия существует только КАК СВОЙСТВО конкретного
+ * филла, у неё нет самостоятельного бытия без него.
  */
 export interface ExecutionLedgerFillEntry {
   readonly kind: 'fill';
@@ -161,15 +87,18 @@ export interface ExecutionLedgerFillEntry {
 /**
  * Funding-расчёт (требование 4: «funding-settlement'ы» — отдельный вид записи, а не переиспользование
  * `fill`: funding — не исполнение заявки, у него нет ни `clientOrderId`, ни стороны сделки, только
- * знаковый денежный поток на открытую позицию). `amount` — получено (`> 0`) либо уплачено (`< 0`);
- * форма МИНИМАЛЬНА нарочно (задача 5 — словарь, не реализация: settlement в v1 архива не резолвится
- * вовсе, см. doc `FundingMarketDataRequirement`, `event-driven.ts`, задача 3) — запись существует,
- * чтобы будущий резолв не требовал ломающего расширения формы ledger'а.
+ * знаковый денежный поток на открытую позицию). Форма МИНИМАЛЬНА нарочно (задача 5 — словарь, не
+ * реализация: settlement в v1 архива не резолвится вовсе, см. doc `FundingMarketDataRequirement`,
+ * `event-driven.ts`, задача 3) — запись существует, чтобы будущий резолв не требовал ломающего
+ * расширения формы ledger'а.
  */
 export interface ExecutionLedgerFundingSettlementEntry {
   readonly kind: 'funding_settlement';
   readonly ts: TimestampUs;
-  /** Знаковый денежный поток: получено (+) или уплачено (-). */
+  /**
+   * Знаковый денежный поток В ВАЛЮТЕ КОТИРОВКИ инструмента (та же единица, что `fee` выше и
+   * `qtyUsd` `ActorPlaceCommand` — ревью раунда 1, M-3): получено (`> 0`) либо уплачено (`< 0`).
+   */
   readonly amount: number;
 }
 
@@ -177,24 +106,103 @@ export interface ExecutionLedgerFundingSettlementEntry {
 export type ExecutionLedgerEntry = ExecutionLedgerFillEntry | ExecutionLedgerFundingSettlementEntry;
 
 /**
- * Execution ledger целиком — упорядоченный (по времени записи, старые первыми) журнал, ОДИН на
- * актора. Флип позиции через ноль (требование 4) — НЕ отдельный вид записи: это факт, ВЫВОДИМЫЙ
- * из последовательности `fill`-записей самим `derivePositionView` (сделка противоположной стороны
- * крупнее текущего остатка), а не что-то, что вызывающий обязан распознать и записать отдельно —
- * заводить для флипа свой `kind` значило бы дублировать информацию, которую сама
- * последовательность `fill`-ов уже несёт, и создавать возможность рассинхронизации («флип был, а
- * запись о нём — нет»), то есть ровно ту дыру, ради закрытия которой существует этот файл.
+ * Execution ledger целиком — упорядоченный (по времени записи, `ts` НЕ убывает — см.
+ * `derivePositionView`, ревью раунда 1, I-6) журнал, ОДИН на актора. Флип позиции через ноль
+ * (требование 4) — НЕ отдельный вид записи: это факт, ВЫВОДИМЫЙ из последовательности
+ * `fill`-записей самим `derivePositionView` (сделка противоположной стороны крупнее текущего
+ * остатка), а не что-то, что вызывающий обязан распознать и записать отдельно — заводить для флипа
+ * свой `kind` значило бы дублировать информацию, которую сама последовательность `fill`-ов уже
+ * несёт, и создавать возможность рассинхронизации («флип был, а запись о нём — нет»), то есть ровно
+ * ту дыру, ради закрытия которой существует этот файл.
  */
 export type ExecutionLedger = readonly ExecutionLedgerEntry[];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Рантайм-валидация ledger'а (ревью раунда 1, I-5): вход из-за JSON-границы чекпойнта.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Правило №7 операционных правил задачи: «гейт, полагающийся на типы вызывающего, гейтом не
+// является». Ledger персистится через чекпойнт изолята (см. doc `ActorStateValue`, `event-driven.
+// ts`) — то есть на входе `derivePositionView` он приходит из JSON, распарсенного вызывающим кодом
+// с типом `any`/`unknown`, а не из доверенного TS-конструктора. Прогон ревью подтвердил: `side`
+// строкой `"BUY"`, `price` строкой `"100"`, `qty:-5, price:NaN` — всё это раньше проходило БЕЗ
+// проверки и давало испорченный `PositionView` (`side` неизвестное значение молча трактовалось как
+// `'sell'`, потому что `entry.side === 'buy'` ложно для чего угодно, кроме точной строки `'buy'`).
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Белый список (rule: валидаторы — белым списком, не чёрным): РОВНО два разрешённых значения. */
+function isOrderSide(value: unknown): value is OrderSide {
+  return value === 'buy' || value === 'sell';
+}
+
+function isExecutionLedgerFillEntry(value: unknown): value is ExecutionLedgerFillEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.kind === 'fill' &&
+    isTimestampUs(v.ts) &&
+    typeof v.clientOrderId === 'string' &&
+    isOrderSide(v.side) &&
+    isFiniteNumber(v.price) &&
+    isFiniteNumber(v.qty) &&
+    v.qty > 0 && // M-4: `qty` «всегда положителен» — доковый инвариант, проверенный рантаймом.
+    isFiniteNumber(v.fee) &&
+    typeof v.last === 'boolean'
+  );
+}
+
+function isExecutionLedgerFundingSettlementEntry(
+  value: unknown,
+): value is ExecutionLedgerFundingSettlementEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return v.kind === 'funding_settlement' && isTimestampUs(v.ts) && isFiniteNumber(v.amount);
+}
+
+/**
+ * Рантайм-проверка ОДНОЙ записи ledger'а (требование I-5 ревью раунда 1) — та же дисциплина, что
+ * `isPlainActorState` (`event-driven.ts`): недоверенное значение проверяется целиком, полю за
+ * полем, белым списком по `kind`/`side`, а не молча приводится типом вызывающего.
+ */
+export function isExecutionLedgerEntry(value: unknown): value is ExecutionLedgerEntry {
+  return isExecutionLedgerFillEntry(value) || isExecutionLedgerFundingSettlementEntry(value);
+}
+
+/** Рантайм-проверка ВСЕГО ledger'а — массив, каждый элемент которого проходит `isExecutionLedgerEntry`. */
+export function isExecutionLedger(value: unknown): value is ExecutionLedger {
+  return Array.isArray(value) && value.every(isExecutionLedgerEntry);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // derivePositionView — каноническая проекция ledger → PositionView (требования 3, 4).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Допуск для сравнения остатка позиции с нулём (ревью раунда 1, C-1, Critical). Плавающая точка
+ * ГАРАНТИРОВАННО не даёт точного нуля на дробных лестницах (`0.1 + 0.2 - 0.3 !== 0` в IEEE754,
+ * побитово) — сравнение `=== 0` здесь неприменимо НЕ по недосмотру, а по устройству арифметики с
+ * плавающей точкой: прогон ревью на реальной лестнице тейк-профитов (`0.15` тремя траншами по
+ * `0.05`) дал остаток `1.3877787807814457e-17` с ФИКТИВНЫМ флипом через ноль (позиция «закрыта
+ * полностью» отчиталась новым `openedAt`, которого не было).
+ *
+ * Величина — `1e-9`: на два порядка меньше минимального шага размера ордера реальных venue
+ * (satoshi-класс точности, `1e-8` BTC) — допуск не должен поглотить легитимный дробный остаток
+ * целиком, только шум округления IEEE754 (типично `~1e-16`..`~1e-17` на операцию).
+ */
+export const POSITION_QTY_EPSILON = 1e-9;
+
+function isNearZero(qty: number): boolean {
+  return Math.abs(qty) < POSITION_QTY_EPSILON;
+}
+
+/**
  * Промежуточное состояние свёртки: `qtySigned` — остаток со знаком (`> 0` long, `< 0` short,
- * `=== 0` flat), `avgPrice`/`openedAtUs` — характеристики ТЕКУЩЕЙ эры (не определены, пока
- * `qtySigned === 0`).
+ * `=== 0` flat — РОВНО ноль: `foldFill` ниже СНИМАЕТ float-шум через `isNearZero` до того, как
+ * записать его в `qtySigned`, поэтому здесь `=== 0` уже безопасно), `avgPrice`/`openedAtUs` —
+ * характеристики ТЕКУЩЕЙ эры (не определены, пока `qtySigned === 0`).
  */
 interface FoldState {
   readonly qtySigned: number;
@@ -221,13 +229,15 @@ function sameSign(a: number, b: number): boolean {
  *    этого филла.
  * 2. Тот же знак, что текущий остаток (добавление в ТУ ЖЕ сторону) — средневзвешенная цена
  *    пересчитывается по ОБЪЁМУ (не по количеству филлов), `openedAtUs` НЕ меняется — эра та же.
- * 3. Противоположный знак (выход, полный либо частичный). Если знак остатка ПОСЛЕ филла
- *    совпадает со знаком ДО (или остаток — ровно ноль) — это выход из ТОЙ ЖЕ эры: `avgPrice`
- *    сохраняется (частичный/полный выход не меняет цену входа оставшейся части), `openedAtUs` не
- *    меняется. Если знак остатка ПОСЛЕ филла ПЕРЕВЁРНУТ относительно знака ДО — это ФЛИП через
- *    ноль: часть филла, превышающая прежний остаток, открывает НОВУЮ эру ПО ЦЕНЕ ЭТОГО ЖЕ филла
- *    (единственная цена, по которой эта часть реально исполнилась) СО ВРЕМЕНЕМ ЭТОГО ЖЕ филла —
- *    ровно требование брифа «openedAt от НОВОГО открытия, а не от исходного».
+ * 3. Противоположный знак (выход, полный либо частичный). `isNearZero` ПЕРВЫМ (C-1, Critical —
+ *    порядок проверок важен: на дробных количествах точный `remainingSigned === 0` ПОЧТИ НИКОГДА
+ *    не выполняется побитово, а знак float-шума случаен, из-за чего проверка знака ДО проверки
+ *    «около нуля» иногда давала ФИКТИВНЫЙ флип на закрытии дробной позиции): около нуля — эра
+ *    закончилась, `qtySigned` СНИМАЕТСЯ до ровно `0`, `avgPrice`/`openedAtUs` сохраняются про запас
+ *    (следующая новая эра их всё равно перезапишет с чистого места). Иначе — знак остатка совпадает
+ *    со знаком ДО: выход из ТОЙ ЖЕ эры, `avgPrice`/`openedAtUs` держатся. Иначе — знак ПЕРЕВЁРНУТ:
+ *    ФЛИП через ноль, часть филла, превышающая прежний остаток, открывает НОВУЮ эру ПО ЦЕНЕ и
+ *    ВРЕМЕНИ ЭТОГО ЖЕ филла — ровно требование брифа «openedAt от НОВОГО открытия, а не от исходного».
  */
 function foldFill(state: FoldState, entry: ExecutionLedgerFillEntry): FoldState {
   const fillSigned = signedQtyOf(entry);
@@ -244,15 +254,45 @@ function foldFill(state: FoldState, entry: ExecutionLedgerFillEntry): FoldState 
     return { qtySigned: state.qtySigned + fillSigned, avgPrice, openedAtUs: state.openedAtUs };
   }
 
-  // Противоположный знак — остаток может уменьшиться (частичный выход), обнулиться (полный выход)
-  // либо переменить знак (флип через ноль).
+  // Противоположный знак — остаток может уменьшиться (частичный выход), обнулиться (полный выход,
+  // с float-шумом вместо точного нуля на дробных количествах — C-1) либо переменить знак (флип).
   const remainingSigned = state.qtySigned + fillSigned;
-  if (remainingSigned === 0 || sameSign(remainingSigned, state.qtySigned)) {
-    // Частичный либо полный выход БЕЗ флипа — эра (если осталась) та же: avgPrice/openedAt держатся.
+  if (isNearZero(remainingSigned)) {
+    // Полный выход. `qtySigned: 0` — РОВНО ноль, не остаточный шум: следующий fill (если будет)
+    // откроет новую эру с чистого места веткой `state.qtySigned === 0` выше.
+    return { qtySigned: 0, avgPrice: state.avgPrice, openedAtUs: state.openedAtUs };
+  }
+  if (sameSign(remainingSigned, state.qtySigned)) {
+    // Частичный выход БЕЗ флипа — эра та же: avgPrice/openedAt держатся.
     return { qtySigned: remainingSigned, avgPrice: state.avgPrice, openedAtUs: state.openedAtUs };
   }
   // Флип: новая эра с этого самого филла.
   return { qtySigned: remainingSigned, avgPrice: entry.price, openedAtUs: entry.ts };
+}
+
+/**
+ * Свернуть ОДНУ запись ledger'а (не только `fill`) — исчерпывающий `switch`, а не `if (kind !==
+ * 'fill') continue` (ревью раунда 1, I-1, Important: мутационная проба добавила гипотетический
+ * вид записи `liquidation` с полем, меняющим размер позиции, — `if`-фильтр молча его игнорировал,
+ * `tsc --strict` был чист. `switch` + `assertNever` делает то же самое НЕВОЗМОЖНЫМ: забытый case
+ * для нового варианта `ExecutionLedgerEntry` красит сборку здесь же, идиома уже есть в файле у
+ * `defineActor`, `event-driven.ts`).
+ */
+function foldEntry(state: FoldState, entry: ExecutionLedgerEntry): FoldState {
+  switch (entry.kind) {
+    case 'fill':
+      return foldFill(state, entry);
+    case 'funding_settlement':
+      // Funding меняет P&L, а не размер/сторону позиции — `qty`/`side`/`openedAt`/`avgEntryPrice`
+      // от него СТРУКТУРНО не зависят, поэтому состояние эры не меняется.
+      return state;
+    default: {
+      const exhaustive: never = entry;
+      throw new Error(
+        `derivePositionView: неизвестный вид записи ledger'а "${String((exhaustive as { kind?: unknown }).kind)}"`,
+      );
+    }
+  }
 }
 
 /**
@@ -263,27 +303,48 @@ function foldFill(state: FoldState, entry: ExecutionLedgerFillEntry): FoldState 
  * функция лишь ПРОЕЦИРУЕТ его в снимок — реализация того, КАК/КОГДА ledger пополняется по мере
  * поступления `fill`-событий, живёт в движке (S2, `@trdlabs/engine`), не здесь.
  *
- * `funding_settlement`-записи НЕ участвуют в свёртке ниже: funding меняет P&L, а не размер/сторону
- * позиции — `qty`/`side`/`openedAt`/`avgEntryPrice` от него не зависят СТРУКТУРНО, поэтому свёртка
- * фильтрует только `fill`.
+ * Валидирует КАЖДУЮ запись (`isExecutionLedgerEntry`, ревью раунда 1, I-5) и ПОРЯДОК (`ts` не
+ * убывает, I-6: свёртка структурно зависит от порядка — те же две записи в обратной
+ * последовательности дают другой `openedAt`/`avgEntryPrice`, а тип `ExecutionLedger` порядок
+ * массива никак не проверяет) — бросает `RangeError` на первом нарушении (та же дисциплина, что
+ * `timestampUs`/`durationUs`, `time-us.ts`: пара «конструктор/проекция значения» здесь бросает,
+ * `checkRevisionTransition`/`parseArchiveRow` там, где вызывающему важно различать исходы по коду,
+ * возвращают вердикт — `derivePositionView` ближе к первой паре по форме сигнатуры).
  *
- * Возвращает `undefined`, если по итогам всей истории позиция flat (`qtySigned === 0`) — ровно то,
- * что несёт `ActorContext.position()`.
+ * Возвращает `undefined`, если по итогам всей истории позиция flat — ровно то, что несёт
+ * `ActorContext.position()`.
  */
 export function derivePositionView(ledger: ExecutionLedger): PositionView | undefined {
   let state = FLAT_STATE;
+  let lastTs: TimestampUs | undefined;
   for (const entry of ledger) {
-    if (entry.kind !== 'fill') continue;
-    state = foldFill(state, entry);
+    if (!isExecutionLedgerEntry(entry)) {
+      throw new RangeError(`derivePositionView: недопустимая запись execution ledger'а: ${JSON.stringify(entry)}`);
+    }
+    if (lastTs !== undefined && entry.ts < lastTs) {
+      throw new RangeError(
+        `derivePositionView: ledger не по неубывающему ts (${lastTs} → ${entry.ts}) — свёртка структурно ` +
+          'зависит от порядка записей',
+      );
+    }
+    lastTs = entry.ts;
+    state = foldEntry(state, entry);
   }
   if (state.qtySigned === 0) return undefined;
   // Инвариант свёртки: qtySigned !== 0 ⇒ openedAtUs всегда установлен (любая ветка foldFill,
   // покидающая flat, устанавливает его) — приведение типа здесь не ослабляет проверку, а называет
   // то, что свёртка уже гарантирует структурно.
+  //
+  // `as PositionView` — ЕДИНСТВЕННОЕ место в пакете, которому разрешено произвести `PositionView`
+  // (см. doc бранд-символа `POSITION_VIEW_BRAND`, `event-driven.ts`): плоский объект здесь СТРУКТУРНО
+  // — это ровно форма `PositionView` без бранд-поля, TS разрешает сужающий `as` в эту сторону
+  // (`PositionView` assignable ВНИЗ к безбрандовой форме, обратное — нет), а получить `unique symbol`
+  // `POSITION_VIEW_BRAND` для литеральной сборки объекта неоткуда — он не экспортирован и не имеет
+  // рантайм-значения (`declare const`).
   return {
     side: state.qtySigned > 0 ? 'long' : 'short',
     qty: Math.abs(state.qtySigned),
     avgEntryPrice: state.avgPrice,
     openedAt: state.openedAtUs as TimestampUs,
-  };
+  } as PositionView;
 }

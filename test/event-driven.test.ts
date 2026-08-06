@@ -18,12 +18,15 @@ import {
   SUPPORTED_CONTRACT_VERSIONS,
   defineActor,
   durationUs,
+  findDuplicateSubscriptionIds,
+  isPlainActorState,
   platformContractContext,
   timestampUs,
   type ActorCommand,
   type ActorContext,
   type ActorInit,
   type ActorInputEvent,
+  type ActorStateValue,
   type ActorSubscriptionDescriptor,
   type EventDrivenModule,
   type FundingReading,
@@ -32,6 +35,10 @@ import {
   type ModuleManifest,
   type ObservedValue,
   type OiPoint,
+  type OpenLimitOrderView,
+  type OpenMarketOrderView,
+  type OpenOrderView,
+  type StrategyActor,
   type TakerReading,
 } from '../src/research-contract/index.js';
 import { validate, schemaAsset } from '../src/validation/index.js';
@@ -245,6 +252,146 @@ test('ActorInit несёт закрытый список ActorSubscriptionDescri
   const actor = module.createActor(init);
   assert.deepEqual(seenInit?.subscriptions, subscriptions);
   assert.deepEqual(actor.onEvent(CANDLE_CLOSED, CTX_STUB), []);
+});
+
+// M-4 ревью раунда 1: дубли subscriptionId — типом не исключены, проверяются рантаймом.
+test('findDuplicateSubscriptionIds: пусто без дублей, дубль возвращается один раз', () => {
+  const noDup: readonly ActorSubscriptionDescriptor[] = [
+    { subscriptionId: 'sub-1', kind: 'candles', requirementId: 'req-candles' },
+    { subscriptionId: 'sub-2', kind: 'funding', requirementId: 'req-funding' },
+  ];
+  assert.deepEqual(findDuplicateSubscriptionIds(noDup), []);
+
+  const withDup: readonly ActorSubscriptionDescriptor[] = [
+    { subscriptionId: 'sub-1', kind: 'candles', requirementId: 'req-candles' },
+    { subscriptionId: 'sub-1', kind: 'candles', requirementId: 'req-candles-2' },
+    { subscriptionId: 'sub-2', kind: 'funding', requirementId: 'req-funding' },
+  ];
+  assert.deepEqual(findDuplicateSubscriptionIds(withDup), ['sub-1']);
+});
+
+// --- state-слот: ActorInit.state / StrategyActor.snapshotState (ревью раунда 1, I-3) ---
+
+test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять/вернуть при чекпойнте»', () => {
+  const priorState: ActorStateValue = { counter: 3, tags: ['a', 'b'] };
+  assert.ok(isPlainActorState(priorState), 'фикстура сама обязана быть валидным state-слотом');
+
+  const init: ActorInit = {
+    params: {},
+    seed: 1,
+    symbol: 'BTCUSDT',
+    subscriptions: [],
+    state: priorState,
+  };
+
+  let capturedInit: ActorInit | undefined;
+  const module: EventDrivenModule = {
+    createActor: (i) => {
+      capturedInit = i;
+      let counter = (i.state as { readonly counter: number } | undefined)?.counter ?? 0;
+      const actor: StrategyActor = {
+        onEvent: () => {
+          counter += 1;
+          return [];
+        },
+        snapshotState: () => ({ counter }),
+      };
+      return actor;
+    },
+  };
+
+  const actor = module.createActor(init);
+  assert.deepEqual(capturedInit?.state, priorState);
+  actor.onEvent(CANDLE_CLOSED, CTX_STUB);
+  const snapshot = actor.snapshotState?.();
+  assert.ok(isPlainActorState(snapshot), 'снятое состояние обязано пройти isPlainActorState на границе хоста');
+  assert.deepEqual(snapshot, { counter: 4 });
+
+  // Первый запуск актора — состояния снимать ещё не с чего, `state` опционален.
+  const firstRunInit: ActorInit = { params: {}, seed: 2, symbol: 'ETHUSDT', subscriptions: [] };
+  assert.equal(firstRunInit.state, undefined);
+});
+
+test('snapshotState опционален — актор без собственного состояния его не объявляет', () => {
+  const actor = defineActor({});
+  assert.equal(actor.snapshotState, undefined);
+});
+
+// --- OpenOrderView: дискриминированный union по type (ревью раунда 1, I-7); status (I-2) ---
+
+test('I-7: OpenOrderView — market/limit/stop_market дискриминированы, как ActorPlaceCommand', () => {
+  const market: OpenMarketOrderView = {
+    clientOrderId: 'o-1',
+    side: 'buy',
+    type: 'market',
+    status: 'accepted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    createdTs: timestampUs(1_700_000_000_000_000),
+  };
+  const limit: OpenLimitOrderView = {
+    clientOrderId: 'o-2',
+    side: 'sell',
+    type: 'limit',
+    status: 'submitted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    price: 55_000,
+    createdTs: timestampUs(1_700_000_000_000_000),
+  };
+  const views: readonly OpenOrderView[] = [market, limit];
+  assert.equal(views[0]?.type, 'market');
+  assert.equal(views[1]?.type, 'limit');
+
+  // Остаток заявки вычислим: qty и filledQty — ОДНА единица (базовая валюта), не qtyUsd (C-3).
+  assert.equal(market.qty - market.filledQty, 0.002);
+
+  // @ts-expect-error — лимитная заявка без price неоднозначна, симметрично ActorPlaceLimitCommand.
+  const missingPrice: OpenLimitOrderView = {
+    clientOrderId: 'o-3',
+    side: 'buy',
+    type: 'limit',
+    status: 'accepted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    createdTs: timestampUs(1),
+  };
+  void missingPrice;
+
+  const marketWithPrice: OpenMarketOrderView = {
+    clientOrderId: 'o-4',
+    side: 'buy',
+    type: 'market',
+    status: 'accepted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    // @ts-expect-error — рыночная заявка с ценой неоднозначна, симметрично ActorPlaceMarketCommand.
+    price: 50_000,
+    createdTs: timestampUs(1),
+  };
+  void marketWithPrice;
+});
+
+test('I-2: status различает submitted/accepted — ортогонально filledQty', () => {
+  const submitted: OpenMarketOrderView = {
+    clientOrderId: 'o-1',
+    side: 'buy',
+    type: 'market',
+    status: 'submitted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    createdTs: timestampUs(1),
+  };
+  const accepted: OpenMarketOrderView = { ...submitted, status: 'accepted' };
+  // Оба несут filledQty:0 — status различает их РОВНО там, где filledQty не может (прогон ревью:
+  // старая форма без status давала побайтово идентичные объекты для этих двух стадий).
+  assert.notDeepEqual(submitted, accepted);
+  assert.equal(submitted.filledQty, accepted.filledQty);
 });
 
 test('defineActor: специфичный хендлер получает событие своего вида', () => {

@@ -168,8 +168,10 @@ export interface ObservedValue<T> {
 // `ActorContext`) — НЕ восстанавливает снесённые формы под старыми именами. Разница не
 // косметическая: новый `PositionView.openedAt` ВЫВЕДЕН из execution ledger'а (`actor-state.ts`),
 // а не хранится отдельным полем-флагом, и `unrealizedPnl` в нём НЕТ намеренно (см. doc
-// `PositionView`). `OpenOrderStatus` как отдельный тип не восстановлен вовсе — см. doc
-// `OpenOrderView`, почему.
+// `PositionView`). `OpenOrderStatus` ЗАВЕДЁН заново под старым именем, но с НОВЫМ, более узким
+// составом (`'submitted' | 'accepted'` — ревью раунда 1, I-2: жизненный цикл заявки и
+// исполненное количество — два ортогональных измерения, схлопывать их в одно нельзя), см. doc
+// `OpenOrderView`.
 
 /** Сторона заявки. Отдельно от `'long' | 'short'` решений 017: заявка — buy/sell, не позиция. */
 export type OrderSide = 'buy' | 'sell';
@@ -795,33 +797,231 @@ export type ActorWarmupSource = { readonly kind: 'tape_replay' } | { readonly ki
 // Актор.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Авторский state-слот (требование 1) — plain-data, проверяется РАНТАЙМОМ, не только типом.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Почему нужен рантайм-валидатор, а не только тип. Слот — собственное состояние актора МЕЖДУ
+// вызовами `onEvent` (например: скользящие суммы, счётчики, ручные индикаторы, которые автору
+// проще держать сам, чем пересчитывать из истории на каждый вызов). Состояние ОБЯЗАНО пережить
+// чекпойнт и восстановление изолята (сбой хоста, миграция, холодный рестарт после простоя) — то
+// есть обязано пройти через JSON туда и обратно байт-в-байт. Замыкание (функция, захватившая
+// внешние переменные) сериализуется в `{}` или бросает при `JSON.stringify` — тип TS `unknown`/
+// generic-параметр НЕ может отличить «этот объект переживёт сериализацию» от «этот объект выглядит
+// как данные, но внутри держит функцию» на этапе компиляции: сериализуемость — рантайм-свойство
+// КОНКРЕТНОГО значения, а не структурное свойство его статического типа. Отсюда — `isPlainActorState`
+// ниже: единственный способ поймать «это не переживёт границу» ДО того, как оно её попытается
+// пересечь.
+//
+// Точка крепления в контракте (ревью раунда 1, I-3: до этой правки тип/валидатор существовали САМИ
+// ПО СЕБЕ, ни на что не надетые) — `StrategyActor.snapshotState`/`ActorInit.state` ниже, пара
+// «снять/вернуть при чекпойнте». Тип и валидатор объявлены ИМЕННО здесь, а не в `actor-state.ts`
+// (где были раньше): оба места, где `ActorStateValue` реально используется как тип поля
+// (`StrategyActor`, `ActorInit`), живут в ЭТОМ файле — перенос в сосед потребовал бы обратного
+// импорта оттуда сюда и замкнул бы кольцо (`actor-state.ts` и так импортирует ОТСЮДА `OrderSide`/
+// `PositionView`, см. doc `actor-state.ts`).
+
 /**
- * Одна открытая (нетерминальная) заявка актора — то, что видит `ctx.orders.open()`. Поля — то,
- * чем заявка была СОЗДАНА (команда `place`, дословно; хост обязан их сохранить, а не пере-угадать
- * по последующим событиям), плюс `filledQty` — уже исполненная часть по потоку `fill` (задача 5).
+ * Значение, законное в авторском state-слоте актора. Рекурсивный plain-data union — ровно то
+ * подмножество JS-значений, что `JSON.parse(JSON.stringify(x))` восстанавливает БЕЗ потерь и без
+ * молчаливых искажений (в отличие, например, от объекта с ключом `undefined`-значения, который
+ * `JSON.stringify` тихо роняет, или от `Date`, который превращается в строку и теряет тип).
  *
- * Отдельного поля-СТАТУСА (был `OpenOrderStatus`, снесён задачей 2, см. doc выше у `OrderSide`)
- * здесь НЕТ намеренно: «принята, но ещё не исполнена» ⇔ `filledQty === 0`, «частично исполнена» ⇔
- * `0 < filledQty < requested` — обе фразы читаются из уже присутствующего числа. Заводить рядом
- * ещё и enum/булев статус с той же информацией значило бы завести ВТОРОЙ источник истины для
- * одного факта — тот же класс ошибки, ради недопущения которого ниже написан execution ledger
- * (`actor-state.ts`): величина, которая может незаметно разойтись со своим собственным
- * производным полем, рано или поздно разойдётся.
+ * Явно ЗАКРЫТ на верхнем уровне: `null`/`boolean`/`string`/конечное `number`/массив/plain-объект.
+ * `NaN`/`Infinity` не входят (типовое ограничение `number` их не исключает, но `isPlainActorState`
+ * отклоняет их рантаймом — та же дисциплина, что `isTimestampUs`/`isDurationUs` в `time-us.ts`:
+ * тип называет НАМЕРЕНИЕ, рантайм-предикат его проверяет на недоверенном значении).
  */
-export interface OpenOrderView {
+export type ActorStateValue =
+  | null
+  | boolean
+  | string
+  | number
+  | readonly ActorStateValue[]
+  | { readonly [key: string]: ActorStateValue };
+
+/**
+ * «Чистота» собственных ключей ОБЪЕКТА (не массива — см. `hasOnlyPlainArrayKeys` ниже, у массива
+ * есть законный неперечислимый `length`). Отвергает символьный ключ, неперечислимый ключ, accessor
+ * (get/set) — `Object.values`/`Object.keys` перечисляют ТОЛЬКО собственные ПЕРЕЧИСЛИМЫЕ СТРОКОВЫЕ
+ * ключи и потому МОЛЧА пропускают все три (ревью раунда 1, I-4, прогон: функция под символьным
+ * ключом и неперечислимое свойство-функция обе принимались бы прежней версией). `Reflect.ownKeys`
+ * перечисляет буквально ВСЁ — единственный способ увидеть то, что `Object.values` прячет.
+ */
+function hasOnlyPlainOwnKeys(obj: object): boolean {
+  for (const key of Reflect.ownKeys(obj)) {
+    if (typeof key === 'symbol') return false;
+    const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+    if (descriptor === undefined || !descriptor.enumerable) return false;
+    if (descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
+}
+
+/**
+ * «Чистота» собственных ключей МАССИВА: РОВНО канонические индексы `0..length-1` строками плюс
+ * встроенный неперечислимый `length` — и ничего сверх. Ловит оба array-специфичных пробела I-4
+ * ревью: sparse-дыру (`[1, , 3]` — `Reflect.ownKeys` не перечисляет ОТСУТСТВУЮЩИЙ индекс 1, значит
+ * `keys.length !== arr.length + 1`; `JSON.stringify` превращает дыру в `null` — значение до/после
+ * границы уже не одно и то же) и добавленное нечисловое свойство (`arr.extra = fn` — по умолчанию
+ * ПЕРЕЧИСЛИМО, но `.every()` по индексам его никогда не увидит, раз оно не индекс).
+ */
+function hasOnlyPlainArrayKeys(arr: readonly unknown[]): boolean {
+  const keys = Reflect.ownKeys(arr);
+  if (keys.length !== arr.length + 1) return false; // +1 — встроенный `length`.
+  for (const key of keys) {
+    if (key === 'length') continue;
+    if (typeof key === 'symbol') return false;
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= arr.length) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(arr, key);
+    if (descriptor === undefined || !descriptor.enumerable) return false;
+    if (descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
+}
+
+/**
+ * Рекурсивный обход с отслеживанием ТЕКУЩЕГО ПУТИ предков (не всех когда-либо посещённых узлов):
+ * `ancestors` пополняется ПЕРЕД рекурсией в потомков и очищается ПОСЛЕ (backtracking) — так
+ * отличается настоящий ЦИКЛ (узел ссылается сам на себя через цепочку потомков) от легитимного
+ * ДИАМАНТА (два разных поля указывают на ОДИН И ТОТ ЖЕ вложенный объект, но не по кругу: JSON это
+ * прекрасно сериализует, просто теряя разделяемую идентичность, что для plain-data не является
+ * пороком). Глобальный «посещённый» `Set` без backtracking спутал бы диамант с циклом и отклонял
+ * бы законные значения.
+ */
+function isPlainDataValue(value: unknown, ancestors: ReadonlySet<object>): boolean {
+  if (value === null) return true;
+  const t = typeof value;
+  if (t === 'string' || t === 'boolean') return true;
+  if (t === 'number') return Number.isFinite(value as number);
+  // function/symbol/bigint/undefined — НЕ plain-data. `undefined` внутри структуры (не как
+  // отсутствующий ключ, а как явное значение) тоже отклонён: `JSON.stringify` роняет такие ключи
+  // молча, то есть значение до/после границы JSON — уже не одно и то же значение.
+  if (t !== 'object') return false;
+
+  const obj = value as object;
+  if (ancestors.has(obj)) return false; // настоящий цикл — см. doc выше.
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(obj);
+
+  if (Array.isArray(obj)) {
+    if (!hasOnlyPlainArrayKeys(obj)) return false;
+    return obj.every((item) => isPlainDataValue(item, nextAncestors));
+  }
+
+  // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
+  // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
+  // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов (который
+  // расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к двум
+  // разрешённым формам прототипа.
+  const proto = Object.getPrototypeOf(obj);
+  if (proto !== Object.prototype && proto !== null) return false;
+  if (!hasOnlyPlainOwnKeys(obj)) return false;
+
+  return Object.values(obj as Record<string, unknown>).every((v) => isPlainDataValue(v, nextAncestors));
+}
+
+/**
+ * Рантайм-проверка формы авторского state-слота (требование 1). Отвергает: функции (прямые,
+ * замыкания, под символьным или неперечислимым ключом), accessor-свойства, циклические ссылки,
+ * `symbol`/`bigint`/`undefined`-в-структуре, `NaN`/`Infinity`, экзотические объекты
+ * (`Date`/`Map`/`Set`/класс-инстанс), sparse-массивы, добавленные нечисловые свойства массива.
+ * Принимает вложенную структуру из `null`/`boolean`/`string`/конечных `number`/плотных
+ * массивов/plain-объектов любой глубины (включая разделяемые, не циклические ссылки — диамант).
+ */
+export function isPlainActorState(value: unknown): value is ActorStateValue {
+  return isPlainDataValue(value, new Set());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Открытые заявки — `ctx.orders.open()`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Стадия жизненного цикла ОТКРЫТОЙ заявки — измерение, ОРТОГОНАЛЬНОЕ количеству (ревью раунда 1,
+ * I-2: «нет второго источника истины» неверно применялось к ЭТОМУ полю — `filledQty` ниже отвечает
+ * «сколько исполнено», `status` отвечает «на какой стадии сама заявка», и оба факта не выводятся
+ * друг из друга: `filledQty === 0` не отличает «ещё не подтверждена венью» от «подтверждена, но
+ * исполнения не было» — прогон ревью получил побайтово идентичные объекты для обеих стадий на
+ * прежней форме без статуса).
+ *
+ * Замкнут на ДВУХ значениях: `'triggered'`/`'not triggered'` для `stop_market` сюда НЕ входит — у
+ * контракта пока нет события `order.triggered` (`ActorInputEvent`, замкнутый union), и заводить
+ * статус, который неоткуда корректно заполнить, значило бы завести поле без источника истины для
+ * НЕГО САМОГО. Расширение этого каталога вместе с событием `order.triggered` — задача 6 (§3.10).
+ */
+export type OpenOrderStatus = 'submitted' | 'accepted';
+
+/**
+ * Общие поля трёх вариантов `OpenOrderView` ниже — НЕ экспортирован, тот же приём, что
+ * `RequirementBase` у `MarketDataRequirement` выше (неэкспортный интерфейс, используемый только
+ * через `extends`, называем в `.d.ts` штатно).
+ */
+interface OpenOrderViewBase {
   readonly clientOrderId: string;
   readonly side: OrderSide;
-  readonly type: 'market' | 'limit' | 'stop_market';
-  /** Запрошенный нотионал (см. `ActorPlaceCommand.qtyUsd`) — ДО клампа риском. */
+  readonly status: OpenOrderStatus;
+  /** Запрошенный нотионал в USD, ДО клампа риском (см. `ActorPlaceCommand.qtyUsd`) — своя единица,
+   *  НЕ смешивается с `qty`/`filledQty` ниже (ревью раунда 1, C-3). */
   readonly qtyUsd: number;
-  /** Исполненная часть В БАЗОВОЙ ВАЛЮТЕ инструмента на текущий момент (частичные филлы). */
+  /**
+   * Размер, ПРИНЯТЫЙ риском, В БАЗОВОЙ ВАЛЮТЕ инструмента — та же единица и та же величина, что
+   * `PositionView.qty`/`ExecutionLedgerFillEntry.qty` (`actor-state.ts`). Остаток заявки —
+   * `qty - filledQty`, ОБЕ части одной единицы. Без этого поля остаток был НЕВЫЧИСЛИМ: `qtyUsd`
+   * (запрос ДО клампа, USD) и `filledQty` (исполнение, базовая валюта) — разные измерения, вычесть
+   * одно из другого бессмысленно (ревью раунда 1, C-3, прогон: заявка на 100 USD исполнена целиком
+   * — 0.002 BTC при цене 50 000 — предикат «частично» без `qty` неотличим от «исполнена целиком»).
+   */
+  readonly qty: number;
+  /** Исполненная часть, ТА ЖЕ единица что `qty` выше. `0 < filledQty < qty` ⇔ частичное исполнение. */
   readonly filledQty: number;
-  /** Только для `type: 'limit'`. */
-  readonly price?: number;
-  /** Только для `type: 'stop_market'`. */
-  readonly stopPrice?: number;
   readonly reduceOnly?: boolean;
+  /** Момент, когда хост впервые узнал об этой заявке (ревью раунда 1, M-2: без времени управление
+   *  по возрасту заявки невозможно — снос в исходном черновике был недосмотром, не решением). */
+  readonly createdTs: TimestampUs;
 }
+
+/** Рыночная открытая заявка: цены не несёт (см. `ActorPlaceMarketCommand`). */
+export interface OpenMarketOrderView extends OpenOrderViewBase {
+  readonly type: 'market';
+}
+
+/** Лимитная открытая заявка: `price` обязателен (см. `ActorPlaceLimitCommand`). */
+export interface OpenLimitOrderView extends OpenOrderViewBase {
+  readonly type: 'limit';
+  readonly price: number;
+}
+
+/** Стоп-маркет открытая заявка: `stopPrice` обязателен (см. `ActorPlaceStopMarketCommand`). */
+export interface OpenStopMarketOrderView extends OpenOrderViewBase {
+  readonly type: 'stop_market';
+  readonly stopPrice: number;
+}
+
+/**
+ * Одна открытая (нетерминальная) заявка актора — `ctx.orders.open()`. Разложена НА ТИП ЗАЯВКИ,
+ * СИММЕТРИЧНО `ActorPlaceCommand` выше (ревью раунда 1, I-7): плоские `price?`/`stopPrice?` на
+ * одном интерфейсе типизировали бы `{type:'limit'}` без `price` и `{type:'market', stopPrice:1}` —
+ * тот же класс двусмысленности, ради недопущения которого `ActorPlaceCommand` уже разложен на три
+ * варианта (doc там же: «неоднозначная команда должна отваливаться на схеме, а не доезжать до
+ * движка»); вид, ЧИТАЮЩИЙ заявки, не обязан быть слабее вида, которым их ПОДАЮТ.
+ */
+export type OpenOrderView = OpenMarketOrderView | OpenLimitOrderView | OpenStopMarketOrderView;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PositionView — снимок текущей позиции, `ctx.position()`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Бранд-символ НЕ экспортирован (та же идиома, что `TIMESTAMP_US`/`DURATION_US`, `time-us.ts`):
+// значения не существует в рантайме (`declare const`), поэтому объектный литерал БЕЗ прохода через
+// `derivePositionView` (`actor-state.ts`) никогда не удовлетворит этот тип — TS откажет на
+// отсутствующем свойстве. Заведён ПОСЛЕ ревью раунда 1 (C-2): прогон без единого `as` собрал
+// `ctx.position()`, разошедшийся с `ledger`/`ctx.orders.open()` — «главная цель задачи не
+// достигнута» до этой правки, ничто в типах не обязывало `position()` быть результатом
+// `derivePositionView`. `derivePositionView` — ЕДИНСТВЕННОЕ место в пакете, которому разрешено
+// произвести `PositionView` (через `as`, на плоском объекте той же формы — см. doc там).
+declare const POSITION_VIEW_BRAND: unique symbol;
 
 /**
  * Снимок ТЕКУЩЕЙ позиции актора — то, что видит `ctx.position()` (`undefined`, если позиции нет,
@@ -834,7 +1034,8 @@ export interface OpenOrderView {
  * противоположной стороны крупнее остатка), `openedAt` — момент ИМЕННО флип-филла (новое
  * открытие), а не момент исходного открытия до флипа. Старый released `PositionSnapshot` не нёс
  * ни `openedAt`, ни признаков частичного выхода, хотя хост их держал где-то ещё — этот тип закрывает
- * ровно эту дыру (задача 5, требование 3 брифа).
+ * ровно эту дыру (задача 5, требование 3 брифа). Гарантия «выведен, а не задан» — на уровне ТИПОВ
+ * (бранд выше), не только доки: см. `derivePositionView`.
  *
  * `unrealizedPnl` ОТСУТСТВУЕТ НАМЕРЕННО — не пробел, а решение (требование 3 брифа, не тащить его
  * обратно). Он — производная от ТЕКУЩЕЙ рыночной цены, а цена в актор-модели приходит СОБЫТИЕМ
@@ -846,7 +1047,7 @@ export interface OpenOrderView {
  * посчитать его самому из `avgEntryPrice` и последней увиденной цены — единственного места, где
  * эта величина не лжёт по построению.
  */
-export interface PositionView {
+export type PositionView = {
   readonly side: 'long' | 'short';
   /** Остаток позиции в базовой валюте инструмента. Всегда положителен — знак несёт `side`. */
   readonly qty: number;
@@ -857,7 +1058,7 @@ export interface PositionView {
    */
   readonly avgEntryPrice: number;
   readonly openedAt: TimestampUs;
-}
+} & { readonly [POSITION_VIEW_BRAND]: 'derivePositionView' };
 
 /**
  * Read-only контекст актора — pull-модель (Nautilus Cache), задача 5.
@@ -874,22 +1075,36 @@ export interface PositionView {
  * `orders`/`position` (задача 5, требование 2) — доступ к открытым заявкам и к позиции; ОБЕ формы
  * (`OpenOrderView`/`PositionView`, выше) читаются как СНИМОК на момент вызова, не как живая ссылка
  * — мутировать их нельзя, дальнейшее состояние актор получает только СЛЕДУЮЩИМ вызовом `onEvent`.
+ *
+ * `orders.open`/`position` — readonly-ПОЛЯ функционального типа, НЕ method-синтаксис (ревью раунда
+ * 1, M-5: method-синтаксис в интерфейсе НЕ несёт `readonly`, то есть формально переприсваиваем —
+ * `ctx.position = () => fake` типизировался бы, в отличие от соседних `clock`/`rng`/`readiness`).
  */
 export interface ActorContext {
   readonly clock: { nowUs(): TimestampUs };
   readonly rng: { next(): number };
   readonly readiness: ActorReadiness;
-  readonly orders: { open(): readonly OpenOrderView[] };
-  position(): PositionView | undefined;
+  readonly orders: { readonly open: () => readonly OpenOrderView[] };
+  readonly position: () => PositionView | undefined;
 }
 
 /**
  * Актор: ОДНА точка входа «событие → команды». Не набор методов на живом объекте — форма
  * продиктована JSON-границей изолята (`event-in → CommandBatch-out`, один маршалинг на событие).
  * Пустой массив — валидный ответ (событие проигнорировано).
+ *
+ * `snapshotState` (ревью раунда 1, I-3) — ВТОРАЯ, необязательная точка входа, парная
+ * `ActorInit.state` ниже: хост вызывает её МЕЖДУ вызовами `onEvent` (после обработки события,
+ * перед возможным чекпойнтом изолята) и обязан персистить ПОСЛЕДНЕЕ снятое значение — то самое,
+ * что вернётся актору через `ActorInit.state` при следующем восстановлении. Опциональность
+ * симметрична: актор без собственного состояния между вызовами её не объявляет. Форма значения —
+ * `ActorStateValue` (выше); ЭТА функция сама рантайм-проверку не делает — `isPlainActorState`
+ * (выше) обязанность ХОСТА на границе персиста, симметрично тому, как `derivePositionView`/
+ * `isExecutionLedgerEntry` (`actor-state.ts`) проверяют СВОЮ границу.
  */
 export interface StrategyActor {
   onEvent(event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[];
+  snapshotState?(): ActorStateValue;
 }
 
 /**
@@ -920,6 +1135,27 @@ export interface ActorSubscriptionDescriptor {
 }
 
 /**
+ * Дубли `subscriptionId` внутри одного `ActorInit.subscriptions` — ТИПОМ не исключены (массив из
+ * одинаковых записей типизируется без ошибки; ревью раунда 1, M-4). Резолвер (задача 8/S2) обязан
+ * гарантировать уникальность fail-closed при сборке `ActorInit` — эта функция даёт готовую,
+ * переиспользуемую проверку той же дисциплины, что уже применена к `MarketDataRequirement.id`
+ * (`duplicate_market_data_requirement_id`, `src/validation`), но НЕ встроена в `validate()`:
+ * `ActorInit` — не JSON-граница недоверенного манифеста, а параметр вызова `createActor` от
+ * host/engine, у которого нет отдельного submit-time прохода валидации, куда это можно включить.
+ */
+export function findDuplicateSubscriptionIds(
+  subscriptions: readonly ActorSubscriptionDescriptor[],
+): readonly SubscriptionId[] {
+  const seen = new Set<SubscriptionId>();
+  const duplicates = new Set<SubscriptionId>();
+  for (const descriptor of subscriptions) {
+    if (seen.has(descriptor.subscriptionId)) duplicates.add(descriptor.subscriptionId);
+    seen.add(descriptor.subscriptionId);
+  }
+  return [...duplicates];
+}
+
+/**
  * Параметры создания экземпляра актора (один экземпляр на символ).
  *
  * `subscriptions` (задача 5, требование 1a) — ЗАКРЫТЫЙ список разрешённых подписок, уезжающий
@@ -928,12 +1164,18 @@ export interface ActorSubscriptionDescriptor {
  * — доc-комментарии в трёх местах файла (`ActorEnvelope`, `MarketSubscriptionStatusChangedEvent`,
  * `observation-status.ts`) утверждали состав подписок как «будущий канал»; с этой задачи канал
  * настоящий, и все три места поправлены на ссылку сюда.
+ *
+ * `state` (ревью раунда 1, I-3) — восстановленное авторское состояние, парная точка
+ * `StrategyActor.snapshotState` выше: `undefined` — ПЕРВЫЙ запуск актора (снимать ещё нечего);
+ * иначе — ПОСЛЕДНЕЕ значение, снятое `snapshotState` перед чекпойнтом, которое хост обязан вернуть
+ * байт-в-байт (после прохода через `isPlainActorState` на своей стороне).
  */
 export interface ActorInit {
   readonly params: Readonly<Record<string, unknown>>;
   readonly seed: number;
   readonly symbol: string;
   readonly subscriptions: readonly ActorSubscriptionDescriptor[];
+  readonly state?: ActorStateValue;
 }
 
 /** Кодовый модуль стратегии формы `event_driven` (аналог `StrategyModule` для `single_position`). */
