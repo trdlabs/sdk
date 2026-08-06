@@ -188,7 +188,7 @@ function observed<T>(value: T): ObservedValue<T> {
 
 const CANDLE_CLOSED: ActorInputEvent = {
   kind: 'market.candle.closed',
-  bar: observed({ ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }),
+  candle: observed({ ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }),
 };
 
 const PLACE: ActorCommand = {
@@ -362,18 +362,18 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
     case 'market.subscription.status_changed':
       return { kind, status: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) };
     case 'order.accepted':
-      return { kind, ts: 1, clientOrderId: 'o-1' };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
     case 'order.denied':
-      return { kind, ts: 1, clientOrderId: 'o-1', reason: 'max_notional' };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'max_notional' };
     case 'order.rejected':
-      return { kind, ts: 1, clientOrderId: 'o-1', reason: 'venue' };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'venue' };
     case 'order.canceled':
-      return { kind, ts: 1, clientOrderId: 'o-1' };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
     case 'order.expired':
-      return { kind, ts: 1, clientOrderId: 'o-1' };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
     case 'fill':
-      return { kind, ts: 1, clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true };
+      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true };
     case 'timer':
-      return { kind, ts: 1, timerId: 't-1' };
+      return { kind, ts: timestampUs(1), timerId: 't-1' };
   }
 }

@@ -54,13 +54,13 @@
           "type": "string",
           "const": "market.candle.closed"
         },
-        "bar": {
+        "candle": {
           "$ref": "#/definitions/ObservedValue%3CBar%3E"
         }
       },
       "required": [
         "kind",
-        "bar"
+        "candle"
       ],
       "additionalProperties": false,
       "description": "Закрытая (историческая) свеча по своему `subscriptionId`. Значение — `Bar` (017)."
@@ -395,7 +395,7 @@
         "funding"
       ],
       "additionalProperties": false,
-      "description": "Funding: rate либо settlement — различаются явно через `FundingReading`/`FundingPoint` (030), а не отдельными `kind` этой задачи. Расщепление «периодический rate-тик» vs «settlement-выплата на границе интервала» — по значению `fundingRate`/`ts` в уже существующем типе, не по форме события: заводить здесь новый value-тип означало бы проектировать его заново, а задача просит ровно `FundingReading` из `market-tape.js`."
+      "description": "Funding: rate либо settlement — ОБА варианта используют это же событие с тем же `FundingReading`. Различение — НЕ по значению `{ts, fundingRate}`: периодический rate-тик и settlement-выплата на границе интервала по этой паре структурно неотличимы. Различение объявляется НА ПОДПИСКЕ (`form: 'rate' | 'settlement'`, задача 3 — здесь не опережается); в v1 `settlement` не резолвится вовсе, потому что датасета для него нет. Заводить здесь новый value-тип для funding означало бы проектировать его заново, а задача просит ровно `FundingReading` из `market-tape.js`."
     },
     "ObservedValue<FundingReading>": {
       "type": "object",
@@ -526,7 +526,7 @@
           "const": "order.accepted"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -548,7 +548,7 @@
           "const": "order.denied"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -574,7 +574,7 @@
           "const": "order.rejected"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -600,7 +600,7 @@
           "const": "order.canceled"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -622,7 +622,7 @@
           "const": "order.expired"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -644,7 +644,7 @@
           "const": "fill"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "clientOrderId": {
           "type": "string"
@@ -674,7 +674,7 @@
         "last"
       ],
       "additionalProperties": false,
-      "description": "Исполнение (полное либо частичное — различает `last`). Инвариант state-before-handler: `ctx.position()`/`ctx.orders.open()` УЖЕ учитывают этот филл к моменту вызова хендлера."
+      "description": "Исполнение (полное либо частичное — различает `last`). Инвариант state-before-handler остаётся в силе НА БУДУЩЕЕ, носитель — `ctx` (см. шапку файла), не это событие: когда задача 5 введёт `ctx.orders()`/`ctx.position()`, они будут УЖЕ учитывать этот филл к моменту вызова хендлера. Минимальный `ActorContext` этой задачи (S1/2) обоих методов ещё не содержит."
     },
     "ActorTimerEvent": {
       "type": "object",
@@ -684,7 +684,7 @@
           "const": "timer"
         },
         "ts": {
-          "type": "number"
+          "$ref": "#/definitions/TimestampUs"
         },
         "timerId": {
           "type": "string"

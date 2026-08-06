@@ -21,9 +21,11 @@
 // - `modify` в v1 ОТСУТСТВУЕТ (Q3): place-after-cancel; FSM минимальна, proof проще.
 // - `order.denied` (локальный отказ риска) ≠ `order.rejected` (отказ venue/симулятора) —
 //   заимствовано у Nautilus; различимость нужна стратегии, чтобы не долбиться в закрытую дверь.
-// - ctx — PULL-модель (Nautilus Cache): снапшот `orders`/`position` в конверте события УЖЕ
-//   отражает доставляемое событие (инвариант state-before-handler). Сам состав `orders()`/
-//   `position()` в `ActorContext` эта задача (S1/2) НЕ вводит — заглушка ждёт задачу 5.
+// - ctx — PULL-модель (Nautilus Cache): к моменту вызова хендлера `ctx.orders()`/`ctx.position()`
+//   УЖЕ отражают доставляемое событие (инвариант state-before-handler; НОСИТЕЛЬ инварианта —
+//   `ctx`, НЕ конверт события — конверт окон/снапшотов не несёт вовсе, см. блок ActorInputEvent
+//   ниже). Сам состав `orders()`/`position()` в `ActorContext` эта задача (S1/2) НЕ вводит —
+//   заглушка ждёт задачу 5.
 
 import type { Bar } from './context.js';
 import type {
@@ -135,11 +137,19 @@ export interface ObservedValue<T> {
 // Сторона заявки — общий тип для команд ниже.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// `OpenOrderStatus`/`OpenOrderView`/`PositionView`/`FlatMarketSlice` (017/S1-задача-1 черновик)
-// снесены вместе со старой формой `ActorContext`: они существовали ТОЛЬКО как её опора
-// (`ctx.orders.open()` / `ctx.position()` / плоский рыночный срез `bar`-события). Задача 5
-// проектирует pull-модель ctx заново, начиная с чистого места, — оставлять эти типы висящими
-// без потребителя значило бы выдавать черновую форму за уже принятое решение.
+// `OpenOrderStatus`/`OpenOrderView`/`PositionView`/`FlatMarketSlice` — RELEASED API контракта
+// (`@trdlabs/sdk@0.13.0`, `CHANGELOG.md:65`; введены исходным event_driven kernel-контрактом E1,
+// коммит `4979fbc` — НЕ задачей 1 этапа S1). Их снос здесь — ЛОМАЮЩЕЕ изменение контракта (план
+// 083 S1, Global Constraint: снос экспортов E1 ломающий, а не правка черновика), сделанное
+// осознанно. Причина сноса: все четыре существовали ТОЛЬКО как опора формы `ActorContext`,
+// сносимой этим же коммитом (`ctx.orders.open()` / `ctx.position()` / плоский рыночный срез
+// `bar`-события) — оставлять их без единственного потребителя значило бы держать released API в
+// подвешенном состоянии до задачи 5, которая проектирует pull-модель ctx заново и не обязана
+// унаследовать именно эту форму. `find_usages` по всем восьми репозиториям экосистемы (см. отчёт
+// задачи) подтвердил отсутствие внешних импортов: `OpenOrderStatus`/`OpenOrderView` встречаются
+// только здесь; `PositionView` — здесь и в двух СТРУКТУРНО ДРУГИХ одноимённых локальных
+// интерфейсах (`backtester`/`lab`, тестовые фикстуры long_oi), не импортированных из
+// `@trdlabs/sdk`.
 
 /** Сторона заявки. Отдельно от `'long' | 'short'` решений 017: заявка — buy/sell, не позиция. */
 export type OrderSide = 'buy' | 'sell';
@@ -169,7 +179,7 @@ export type OrderSide = 'buy' | 'sell';
 /** Закрытая (историческая) свеча по своему `subscriptionId`. Значение — `Bar` (017). */
 export interface MarketCandleClosedEvent {
   readonly kind: 'market.candle.closed';
-  readonly bar: ObservedValue<Bar>;
+  readonly candle: ObservedValue<Bar>;
 }
 
 /**
@@ -195,11 +205,13 @@ export interface MarketTakerVolumeBucketClosedEvent {
 }
 
 /**
- * Funding: rate либо settlement — различаются явно через `FundingReading`/`FundingPoint` (030),
- * а не отдельными `kind` этой задачи. Расщепление «периодический rate-тик» vs «settlement-выплата
- * на границе интервала» — по значению `fundingRate`/`ts` в уже существующем типе, не по форме
- * события: заводить здесь новый value-тип означало бы проектировать его заново, а задача просит
- * ровно `FundingReading` из `market-tape.js`.
+ * Funding: rate либо settlement — ОБА варианта используют это же событие с тем же
+ * `FundingReading`. Различение — НЕ по значению `{ts, fundingRate}`: периодический rate-тик и
+ * settlement-выплата на границе интервала по этой паре структурно неотличимы. Различение
+ * объявляется НА ПОДПИСКЕ (`form: 'rate' | 'settlement'`, задача 3 — здесь не опережается); в v1
+ * `settlement` не резолвится вовсе, потому что датасета для него нет. Заводить здесь новый
+ * value-тип для funding означало бы проектировать его заново, а задача просит ровно
+ * `FundingReading` из `market-tape.js`.
  */
 export interface MarketFundingObservedEvent {
   readonly kind: 'market.funding.observed';
@@ -239,10 +251,15 @@ export interface MarketSubscriptionStatusChangedEvent {
 // рантайма (диспетчер уже переключает по `kind` через `switch`+`assertNever`, новый `case` —
 // локальное изменение). Форм этих событий эта задача не проектирует.
 
+// `ts` во всех шести событиях ниже — `TimestampUs`, НЕ `number` (было так до раунда правок 1,
+// I-7): пять рыночных событий и статус уже µs, а order.*/fill/timer оставались в мс — ровно то
+// сосуществование двух единиц, ради защиты от которого §3.2 вводит бранд-типы (забытый `* 1000`
+// перестаёт быть исполняемым кодом только когда ВСЯ поверхность актора в одной единице).
+
 /** Заявка принята средой (venue/симулятором). */
 export interface ActorOrderAcceptedEvent {
   readonly kind: 'order.accepted';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
@@ -252,7 +269,7 @@ export interface ActorOrderAcceptedEvent {
  */
 export interface ActorOrderDeniedEvent {
   readonly kind: 'order.denied';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly reason: string;
 }
@@ -260,7 +277,7 @@ export interface ActorOrderDeniedEvent {
 /** Заявка отклонена СРЕДОЙ (venue/симулятор). Терминальный. */
 export interface ActorOrderRejectedEvent {
   readonly kind: 'order.rejected';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly reason: string;
 }
@@ -268,24 +285,26 @@ export interface ActorOrderRejectedEvent {
 /** Заявка отменена (по команде `cancel` либо средой). Терминальный. */
 export interface ActorOrderCanceledEvent {
   readonly kind: 'order.canceled';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
 /** Заявка истекла по TIF/сроку. Терминальный. */
 export interface ActorOrderExpiredEvent {
   readonly kind: 'order.expired';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
 /**
- * Исполнение (полное либо частичное — различает `last`). Инвариант state-before-handler:
- * `ctx.position()`/`ctx.orders.open()` УЖЕ учитывают этот филл к моменту вызова хендлера.
+ * Исполнение (полное либо частичное — различает `last`). Инвариант state-before-handler
+ * остаётся в силе НА БУДУЩЕЕ, носитель — `ctx` (см. шапку файла), не это событие: когда задача 5
+ * введёт `ctx.orders()`/`ctx.position()`, они будут УЖЕ учитывать этот филл к моменту вызова
+ * хендлера. Минимальный `ActorContext` этой задачи (S1/2) обоих методов ещё не содержит.
  */
 export interface ActorFillEvent {
   readonly kind: 'fill';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly price: number;
   /** Исполненный размер в базовой валюте инструмента. */
@@ -302,7 +321,7 @@ export interface ActorFillEvent {
  */
 export interface ActorTimerEvent {
   readonly kind: 'timer';
-  readonly ts: number;
+  readonly ts: TimestampUs;
   readonly timerId: string;
 }
 
@@ -322,7 +341,19 @@ export type ActorInputEvent =
   | ActorFillEvent
   | ActorTimerEvent;
 
-/** Все виды входных событий (для проверок полноты диспетчера). */
+/**
+ * Все виды входных событий (для проверок полноты диспетчера).
+ *
+ * Согласованность с `ActorInputEvent` доказана НА ЭТАПЕ ТИПОВ в обе стороны, а не рукописным
+ * совпадением списков (раунд правок 1, I-1 — до этого `ActorInputEventKind` лишь ВЫВОДИЛСЯ из
+ * массива, и дрейф «вариант добавили в union, строку в массив забыли» ничем не ловился):
+ * - `satisfies readonly ActorInputEvent['kind'][]` — массив НЕ ШИРЕ union'а: строка, не
+ *   встречающаяся ни у одного варианта, не пройдёт присваивание;
+ * - `_AssertNoUncoveredKind` ниже — union НЕ ШИРЕ массива: вариант, чей `kind` забыли дописать
+ *   сюда, не удовлетворяет ограничению `extends never` и ломает сборку.
+ * `ActorInputEventKind` по-прежнему ВЫВОДИТСЯ из этого массива (единственный практический
+ * источник строк для рантайма, `eventOf`/тестов) — обе проверки страхуют этот вывод, не заменяют.
+ */
 export const ACTOR_INPUT_EVENT_KINDS = [
   'market.candle.closed',
   'market.open_interest.observed',
@@ -337,9 +368,24 @@ export const ACTOR_INPUT_EVENT_KINDS = [
   'order.expired',
   'fill',
   'timer',
-] as const;
+] as const satisfies readonly ActorInputEvent['kind'][];
 
 export type ActorInputEventKind = (typeof ACTOR_INPUT_EVENT_KINDS)[number];
+
+/**
+ * Генерик-ограничение (не рантайм-значение): `T extends never` компилируется, только если `T`
+ * действительно `never`. Пустой массив-литерал (`const x: T[] = []`) для этой цели не годится —
+ * `[]` присваивается ЛЮБОМУ `T[]` независимо от `T`, ничего не проверяя (эмпирически
+ * перепроверено при разборе ревью — исходная формулировка ревью на этом ломалась молча).
+ */
+type AssertNoUncoveredKind<T extends never> = T;
+
+/**
+ * Вид `ActorInputEvent['kind']`, забытый в `ACTOR_INPUT_EVENT_KINDS`, ломает сборку прямо здесь:
+ * `Exclude<...>` перестаёт быть `never`, и `AssertNoUncoveredKind` отказывается его принять
+ * (`TS2344: Type "..." does not satisfy the constraint 'never'`).
+ */
+type _AssertNoUncoveredKind = AssertNoUncoveredKind<Exclude<ActorInputEvent['kind'], ActorInputEventKind>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ActorCommand — что актор просит у хоста.

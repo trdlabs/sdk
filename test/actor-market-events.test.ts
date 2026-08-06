@@ -5,9 +5,13 @@
 //   1) замкнутость union'а — `switch` БЕЗ `default` над `ActorInputEvent['kind']` компилируется
 //      только если покрывает все ветки; недостающая ветка ловится `assertNever`-паттерном —
 //      типовая проверка, а не рантаймовая (нужен `tsc -p tsconfig.test.json`, `tsx` типы стирает);
-//   2) `ACTOR_INPUT_EVENT_KINDS` согласован с `ActorInputEvent['kind']` в обе стороны: массив не
-//      шире union'а (проверяет присваивание элементов массива параметру, типизированному над
-//      `ActorInputEvent['kind']`) и не уже (проверяет исчерпывающий `switch` выше);
+//   2) `ACTOR_INPUT_EVENT_KINDS` согласован с `ActorInputEvent['kind']` в обе стороны. ПЕРВИЧНАЯ
+//      гарантия теперь в `src` (`event-driven.ts`: `satisfies readonly ActorInputEvent['kind'][]`
+//      + `AssertNoUncoveredKind<Exclude<...>>` — раунд правок 1, I-1: массив, объявленный
+//      `as const` без `satisfies`, страховал вывод `ActorInputEventKind` ТОЛЬКО от себя самого,
+//      не от union'а). Здесь — дублирующая, но независимая проверка через `labelOf`: элементы
+//      массива передаются параметру, типизированному напрямую над `ActorInputEvent['kind']`
+//      (массив не шире union'а), а исчерпывающий `switch` в `labelOf` — что union не шире массива;
 //   3) ни одно рыночное событие не несёт массив свечей — структурно, через excess-property-check
 //      на литерале (`@ts-expect-error`, тот же приём, ради которого существует
 //      `tsconfig.test.json`).
@@ -139,7 +143,7 @@ test('рыночные события не несут поле-массив св
 
   const candle: MarketCandleClosedEvent = {
     kind: 'market.candle.closed',
-    bar: observed(BAR),
+    candle: observed(BAR),
     // @ts-expect-error — MarketCandleClosedEvent не несёт closedCandles (снесено вместе с ActorBarEvent).
     closedCandles: [BAR],
   };
@@ -193,7 +197,7 @@ test('рыночные события не несут поле-массив св
 
 test('валидные рыночные литералы (без лишнего поля) типизируются и попадают в ActorInputEvent', () => {
   const events: readonly ActorInputEvent[] = [
-    { kind: 'market.candle.closed', bar: observed(BAR) },
+    { kind: 'market.candle.closed', candle: observed(BAR) },
     { kind: 'market.open_interest.observed', oi: observed<OiPoint>({ ts: 1, oiTotalUsd: 1 }) },
     {
       kind: 'market.liquidations.bucket_closed',
