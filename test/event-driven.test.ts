@@ -381,7 +381,7 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
     case 'market.funding.observed':
       return { kind, funding: observed<FundingReading>({ state: 'missing' }) };
     case 'market.subscription.status_changed':
-      return { kind, status: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) };
+      return { kind, status: { state: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) } };
     case 'order.accepted':
       return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
     case 'order.denied':

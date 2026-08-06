@@ -101,6 +101,11 @@
         "dataset_boundary_violation",
         "invalid_market_data_requirement",
         "duplicate_market_data_requirement_id",
+        "observation_revision_conflict",
+        "observation_revision_finalized",
+        "observation_revision_skipped",
+        "observation_revision_regressed",
+        "observation_archive_row_corrupt",
         "empty_baseline_variant_diff"
       ],
       "description": "Полная таксономия машиночитаемых кодов валидации (data-model §13.2). Error-коды блокируют приём; warning-коды — нет."

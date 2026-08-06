@@ -35,6 +35,7 @@ import type {
   OiPoint,
   TakerReading,
 } from './market-tape.js';
+import type { ObservationStatus } from './observation-status.js';
 import type { TimeInForce } from './risk-execution.js';
 import type { DurationUs, TimestampUs } from './time-us.js';
 
@@ -234,17 +235,23 @@ export interface MarketFundingObservedEvent {
 // того же `subscriptionId` УЖЕ сигнализирует возврат; симметричное «gap ended» дублировало бы
 // информацию, которую поток несёт и так.
 //
-// Форма статуса — МИНИМАЛЬНАЯ: только `'gap'`. Полный union `ObservationStatus` вводит задача 4;
-// здесь его решение не предвосхищается — состав мог бы оказаться другим.
+// Форма статуса (задача 4, `observation-status.ts`): `MarketSubscriptionStatusChangedEvent`
+// переиспользует ГОТОВУЮ gap-ветку полного union'а `ObservationStatus<T>` — не заводит вторую
+// параллельную форму (задача 2 ввела МИНИМАЛЬНЫЙ `{status:'gap', expectedTsUs}` намеренно как
+// заглушку, зная, что задача 4 расширит его). `Extract` берёт ровно эту ветку структурно, а не по
+// соглашению: `never_observed`/`observed` этому событию недоступны СТРУКТУРНО, потому что обе
+// причины их отсутствия здесь — не «пока не реализовано», а факт устройства события — «вида нет
+// вовсе» долетает статикой в `ActorInit` (не событие), а «наблюдение вернулось» не эмитится своим
+// событием вовсе (см. абзац выше).
 /**
- * Изменение статуса подписки на `'gap'`. `expectedTsUs` — первая ожидаемая, но не пришедшая
- * точка (frontier, на котором обнаружен пропуск), не момент детекции (тот — `eventTsUs`
- * конверта).
+ * Изменение статуса подписки на `'gap'`. `status.expectedTsUs` — первая ожидаемая, но не
+ * пришедшая точка (frontier, на котором обнаружен пропуск), не момент детекции (тот —
+ * `eventTsUs` конверта); причина имени поля (не `sinceUs`) — doc `ObservationStatus`,
+ * `observation-status.ts`, задача 4.
  */
 export interface MarketSubscriptionStatusChangedEvent {
   readonly kind: 'market.subscription.status_changed';
-  readonly status: 'gap';
-  readonly expectedTsUs: TimestampUs;
+  readonly status: Extract<ObservationStatus<never>, { readonly state: 'gap' }>;
 }
 
 // Шов на будущее (НЕ реализовывать здесь): `market.trade` / `market.quote` / `market.book.*`

@@ -34,6 +34,11 @@ export const CODE_SEVERITY: Readonly<Record<ValidationCode, Severity>> = {
   dataset_boundary_violation: 'error',
   invalid_market_data_requirement: 'error',
   duplicate_market_data_requirement_id: 'error',
+  observation_revision_conflict: 'error',
+  observation_revision_finalized: 'error',
+  observation_revision_skipped: 'error',
+  observation_revision_regressed: 'error',
+  observation_archive_row_corrupt: 'error',
   empty_baseline_variant_diff: 'warning',
 };
 

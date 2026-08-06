@@ -503,20 +503,34 @@
           "const": "market.subscription.status_changed"
         },
         "status": {
-          "type": "string",
-          "const": "gap"
-        },
-        "expectedTsUs": {
-          "$ref": "#/definitions/TimestampUs"
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "gap"
+            },
+            "expectedTsUs": {
+              "$ref": "#/definitions/TimestampUs",
+              "description": "Первая ожидаемая, но не пришедшая точка — НЕ `sinceUs`. `sinceUs` двусмысленно ровно потому, что у него два одинаково правдоподобных прочтения: «время последнего известного значения» (backward-looking) или «первая пропущенная точка» (forward-looking) — по имени поля нельзя понять, какое из двух имелось в виду, не заглянув в реализацию. `expectedTsUs` называет ровно то, что нужно диспетчеру: frontier, на котором обнаружен пропуск (см. `MarketSubscriptionStatusChangedEvent`, `event-driven.ts`, задача 2 — тот же смысл, то же имя поля, не вторая параллельная форма)."
+            },
+            "lastObservedTsUs": {
+              "$ref": "#/definitions/TimestampUs",
+              "description": "Последнее РЕАЛЬНО наблюдённое значение до пропуска — если оно вообще было (самый первый пропуск в жизни подписки его не несёт). Только координата для диагностики «насколько давно был последний сигнал»; carry-forward значения это НЕ делает — noise-free gap остаётся gap."
+            }
+          },
+          "required": [
+            "state",
+            "expectedTsUs"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "kind",
-        "status",
-        "expectedTsUs"
+        "status"
       ],
       "additionalProperties": false,
-      "description": "Изменение статуса подписки на `'gap'`. `expectedTsUs` — первая ожидаемая, но не пришедшая точка (frontier, на котором обнаружен пропуск), не момент детекции (тот — `eventTsUs` конверта)."
+      "description": "Изменение статуса подписки на `'gap'`. `status.expectedTsUs` — первая ожидаемая, но не пришедшая точка (frontier, на котором обнаружен пропуск), не момент детекции (тот — `eventTsUs` конверта); причина имени поля (не `sinceUs`) — doc `ObservationStatus`, `observation-status.ts`, задача 4."
     },
     "ActorOrderAcceptedEvent": {
       "type": "object",

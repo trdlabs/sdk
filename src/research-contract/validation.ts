@@ -63,6 +63,24 @@ export type ValidationCode =
   // Два требования одного манифеста с одинаковым `id` (раунд правок 2, К-5) — `id` единственная
   // ручка связи требования с binding'ом ниже по цепочке (задача 8); аналог `duplicate_overlay_ref`.
   | 'duplicate_market_data_requirement_id'
+  // --- error (083 S1 задача 4, аддитивно; нормативные переходы `revision`, `observation-status.ts`) ---
+  // Тот же номер ревизии с ДРУГИМ содержимым — два разных значения под одним номером физически
+  // означают повреждённый поток, а не переиграть детерминированно (см. `checkRevisionTransition`).
+  | 'observation_revision_conflict'
+  // Переход запрошен ПОСЛЕ `final` — `final` терминален в v1 (см. doc `finality`,
+  // `observation-status.ts`); ревизии после final структурно не ожидаются вовсе.
+  | 'observation_revision_finalized'
+  // Ревизия не начинается с 0 либо перескакивает номер без явно объявленной `DeclaredRevisionSkipPolicy`
+  // — fail-closed по умолчанию, «не молча» (требование 2 задачи 4).
+  | 'observation_revision_skipped'
+  // Ревизия УБЫВАЕТ (`next.revision < previous.revision`) — нарушение монотонности внутри
+  // `(subscriptionId, effectiveTsUs)`.
+  | 'observation_revision_regressed'
+  // --- error (083 S1 задача 4, аддитивно; гейт валидности строки архива `parseArchiveRow`) ---
+  // `(hasKind, value)` в одной из двух комбинаций, которые схема архива допускает физически
+  // (колонки независимы), но которые не могут быть правдой одновременно — fail-closed, а не
+  // угадывание намерения (см. doc `parseArchiveRow`, `observation-status.ts`).
+  | 'observation_archive_row_corrupt'
   // --- warning ---
   | 'empty_baseline_variant_diff';
 

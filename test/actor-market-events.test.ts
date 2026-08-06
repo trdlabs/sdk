@@ -179,8 +179,7 @@ test('рыночные события не несут поле-массив св
   // Статус подписки — не носитель значения вовсе, но проверяем и его: та же дисциплина.
   const status: MarketSubscriptionStatusChangedEvent = {
     kind: 'market.subscription.status_changed',
-    status: 'gap',
-    expectedTsUs: timestampUs(1),
+    status: { state: 'gap', expectedTsUs: timestampUs(1) },
     // @ts-expect-error — MarketSubscriptionStatusChangedEvent не несёт closedCandles.
     closedCandles: [BAR],
   };
@@ -208,7 +207,10 @@ test('валидные рыночные литералы (без лишнего 
       taker: observed<TakerReading>({ state: 'missing' }),
     },
     { kind: 'market.funding.observed', funding: observed<FundingReading>({ state: 'missing' }) },
-    { kind: 'market.subscription.status_changed', status: 'gap', expectedTsUs: timestampUs(1) },
+    {
+      kind: 'market.subscription.status_changed',
+      status: { state: 'gap', expectedTsUs: timestampUs(1) },
+    },
   ];
   assert.equal(events.length, 6);
   for (const e of events) assert.equal(typeof e.kind, 'string');
