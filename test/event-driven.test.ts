@@ -17,6 +17,7 @@ import {
   STRATEGY_LIFECYCLES,
   SUPPORTED_CONTRACT_VERSIONS,
   defineActor,
+  durationUs,
   platformContractContext,
   timestampUs,
   type ActorCommand,
@@ -24,6 +25,7 @@ import {
   type ActorInputEvent,
   type FundingReading,
   type LiqPoint,
+  type MarketDataRequirement,
   type ModuleManifest,
   type ObservedValue,
   type OiPoint,
@@ -52,10 +54,26 @@ const BASE: ModuleManifest = {
   hooks: ['onBarClose'],
 };
 
+// 083 S1 задача 3: marketData обязателен для event_driven (`missing_market_data_requirement`) —
+// минимальное валидное требование, не влияющее на то, что именно эти тесты проверяют (lifecycle/
+// хуки/версия контракта), но необходимое, чтобы манифест вообще мог быть принят.
+const ACTOR_MARKET_DATA: readonly MarketDataRequirement[] = [
+  {
+    kind: 'candles',
+    id: 'req-candles',
+    instrument: { venue: 'binance', symbol: 'BTCUSDT' },
+    interval: durationUs(60_000_000),
+    lookback: 200,
+    revisionPolicy: { mode: 'final_only' },
+    priceType: 'trade',
+  },
+];
+
 const ACTOR: ModuleManifest = {
   ...BASE,
   lifecycle: 'event_driven',
   hooks: ['init', 'onEvent', 'dispose'],
+  marketData: ACTOR_MARKET_DATA,
 };
 
 const check = (manifest: ModuleManifest) => validate({ inputKind: 'module', manifest }, CTX);
@@ -179,6 +197,9 @@ test('event_driven НЕ требует onBarClose (правило принадл
 const CTX_STUB: ActorContext = {
   clock: { nowUs: () => timestampUs(1_700_000_000_000_000) },
   rng: { next: () => 0.5 },
+  // 083 S1 задача 3: ActorContext вырос на readiness; для тестов диспетчера/хендлеров ниже
+  // конкретное значение не важно (они не проверяют place-gate), фиксируем 'ready'.
+  readiness: 'ready',
 };
 
 /** Обёртка значения в `ObservedValue<T>` — `final`/`0`, единственная законная комбинация v1. */

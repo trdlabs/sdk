@@ -39,6 +39,21 @@ export type ValidationCode =
   | 'unsupported_reality_model_kind'
   // --- error (083 E1, аддитивно; соответствие набора хуков объявленной форме стратегии) ---
   | 'lifecycle_form_invalid'
+  // --- error (083 S1 задача 3, аддитивно; закрытый каталог MarketDataRequirement, event_driven) ---
+  // `event_driven` без хотя бы одного объявленного требования — гарантированная ошибка конфигурации.
+  | 'missing_market_data_requirement'
+  // `scope: 'venue'` в v1: архив не хранит и не будет хранить по-источниковые значения (свойство
+  // данных, не временный пробел — см. doc `Scope`, event-driven.ts).
+  | 'unsupported_market_data_scope'
+  // `revisionPolicy.mode` вне `'final_only'` в v1: `provisional_and_revisions` не реализован
+  // (единственное из трёх v1-отклонений задачи 3, которое — дорожная карта, а не свойство архива).
+  | 'unsupported_revision_policy'
+  // `funding` с `form: 'settlement'` в v1: датасета (колонки settlement) в архиве физически нет
+  // (свойство данных, не политика — см. doc `FundingMarketDataRequirement`, event-driven.ts).
+  | 'unsupported_funding_form'
+  // Прогон молча пересёк границу `datasetId` без явного `DeclaredDatasetSplice` (требование 5,
+  // event-driven.ts). Код зарезервирован для run plan: проверку окна исполняет НЕ sdk.
+  | 'dataset_boundary_violation'
   // --- warning ---
   | 'empty_baseline_variant_diff';
 

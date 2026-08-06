@@ -3,7 +3,7 @@
 
 import type { OverlayDecision, StrategyDecision } from './decision.js';
 import type { StrategyContext } from './context.js';
-import type { StrategyLifecycle } from './event-driven.js';
+import type { MarketDataRequirement, StrategyLifecycle } from './event-driven.js';
 import type { Ref } from './run.js';
 
 /** Статус неизменяемой версии модуля; forward-only автомат (data-model §14). */
@@ -98,6 +98,19 @@ export interface ModuleManifest {
    * зона рантайма (083 E2–E3), не 017.
    */
   readonly lifecycle?: StrategyLifecycle;
+  /**
+   * 083 S1 задача 3 — объявленные требования к рыночным данным (закрытый каталог `kind`,
+   * `MarketDataRequirement`). Стратегия объявляет СМЫСЛ данных, а не место их покупки: поля
+   * провайдера здесь НЕТ и не будет — конкретный источник выбирает host/run plan цепочкой
+   * `MarketDataRequirement → SubscriptionBinding → ProviderAdapter → канонические market events`.
+   *
+   * Опционально для обратной совместимости с манифестами `017.1`–`017.3` (у них этого поля не
+   * было и не могло быть). ОБЯЗАТЕЛЬНО (непустой массив) при `lifecycle: 'event_driven'` —
+   * `missing_market_data_requirement`, `validate-module.ts`: без объявленных требований актор не
+   * может получить ни одного рыночного события, а это гарантированная ошибка конфигурации, не
+   * валидный edge-case.
+   */
+  readonly marketData?: readonly MarketDataRequirement[];
   /** Произвольная JSON Schema объявленных параметров (FR-034). */
   readonly paramsSchema: object;
   /** Payload параметров (валидируется против `paramsSchema`). */

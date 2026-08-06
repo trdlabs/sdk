@@ -40,6 +40,13 @@
           "$ref": "#/definitions/StrategyLifecycle",
           "description": "083 E1 (аддитивно) — объявленная ФОРМА стратегии. Отсутствует ⇒ `single_position`: манифест без этого поля описывает ровно ту же стратегию, что и до 083 (SC-008). Валидатор проверяет соответствие объявленной формы набору хуков (`lifecycle_form_invalid`); исполнение формы — зона рантайма (083 E2–E3), не 017."
         },
+        "marketData": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MarketDataRequirement"
+          },
+          "description": "083 S1 задача 3 — объявленные требования к рыночным данным (закрытый каталог `kind`, `MarketDataRequirement`). Стратегия объявляет СМЫСЛ данных, а не место их покупки: поля провайдера здесь НЕТ и не будет — конкретный источник выбирает host/run plan цепочкой `MarketDataRequirement → SubscriptionBinding → ProviderAdapter → канонические market events`.\n\nОпционально для обратной совместимости с манифестами `017.1`–`017.3` (у них этого поля не было и не могло быть). ОБЯЗАТЕЛЬНО (непустой массив) при `lifecycle: 'event_driven'` — `missing_market_data_requirement`, `validate-module.ts`: без объявленных требований актор не может получить ни одного рыночного события, а это гарантированная ошибка конфигурации, не валидный edge-case."
+        },
         "paramsSchema": {
           "type": "object",
           "description": "Произвольная JSON Schema объявленных параметров (FR-034)."
@@ -119,6 +126,302 @@
         "event_driven"
       ],
       "description": "Объявленная форма стратегии. Дефолт — `single_position`: манифест без поля `lifecycle` описывает ровно ту же стратегию, что и до 083 (back-compat, SC-008)."
+    },
+    "MarketDataRequirement": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CandlesMarketDataRequirement"
+        },
+        {
+          "$ref": "#/definitions/OpenInterestMarketDataRequirement"
+        },
+        {
+          "$ref": "#/definitions/LiquidationsMarketDataRequirement"
+        },
+        {
+          "$ref": "#/definitions/TakerVolumeMarketDataRequirement"
+        },
+        {
+          "$ref": "#/definitions/FundingMarketDataRequirement"
+        }
+      ],
+      "description": "Замкнутый union требований к рыночным данным формы `event_driven` (закрытый каталог, требование 1)."
+    },
+    "CandlesMarketDataRequirement": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "candles"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instrument": {
+          "$ref": "#/definitions/InstrumentRef"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationUs"
+        },
+        "lookback": {
+          "type": "number"
+        },
+        "revisionPolicy": {
+          "$ref": "#/definitions/RevisionPolicy"
+        },
+        "priceType": {
+          "type": "string",
+          "const": "trade"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "instrument",
+        "interval",
+        "lookback",
+        "revisionPolicy",
+        "priceType"
+      ],
+      "additionalProperties": false,
+      "description": "Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`."
+    },
+    "InstrumentRef": {
+      "type": "object",
+      "properties": {
+        "venue": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "venue",
+        "symbol"
+      ],
+      "additionalProperties": false,
+      "description": "Минимальная ссылка на инструмент. Состав НЕ угадывается здесь — резолвер (задача 8, host/run plan) спроектирует полный instrument-mapping отдельно; пока хватает пары, однозначно идентифицирующей рынок для `interval`/`lookback` ниже."
+    },
+    "DurationUs": {
+      "type": "number",
+      "description": "Длительность в микросекундах. Целое; знак допустим (разность моментов)."
+    },
+    "RevisionPolicy": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "final_only"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "provisional_and_revisions"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Capability-политика ревизий значения (требование 4 задачи 3). В v1 валидатор принимает ТОЛЬКО `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — не потому что данные невозможны, а потому что `provisional_and_revisions` НЕ РЕАЛИЗОВАН в v1 (это единственная из трёх v1-отклонений задачи 3, которая — политика/дорожная карта, а не свойство архива; funding-settlement и `scope:'venue'` ниже — наоборот, свойство архива, см. их док-комментарии). Поле входит в форму СРАЗУ, чтобы будущая реализация ревизий не потребовала ломающего добавления поля — симметрично тому, как `ObservedValue.finality`/`revision` уже несёт оба поля в v1."
+    },
+    "OpenInterestMarketDataRequirement": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "open_interest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instrument": {
+          "$ref": "#/definitions/InstrumentRef"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationUs"
+        },
+        "lookback": {
+          "type": "number"
+        },
+        "revisionPolicy": {
+          "$ref": "#/definitions/RevisionPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        },
+        "unit": {
+          "$ref": "#/definitions/MarketDataUnit"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "instrument",
+        "interval",
+        "lookback",
+        "revisionPolicy",
+        "scope",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "description": "Open interest — point observation (см. `MarketOpenInterestObservedEvent`, задача 2)."
+    },
+    "Scope": {
+      "type": "string",
+      "enum": [
+        "venue",
+        "aggregate"
+      ],
+      "description": "Область агрегации значения. Тип ОСТАЁТСЯ двузначным, чтобы будущее добавление `'venue'` не было ломающим изменением формы — но валидатор в v1 (`validate-module.ts`) ОТВЕРГАЕТ `'venue'`, а не молча не находит данные (`unsupported_market_data_scope`).\n\nРешение владельца 2026-08-06, обе причины — свойство данных, НЕ временный пробел реализации: (1) ликвидационный каскад — явление РЫНОЧНОЕ, а не биржевое, и агрегат по восьми биржам ловит его полнее и раньше любой отдельной книги; стакан этот контракт не моделирует (исполнение — worst-case барными филлами), поэтому отсутствие `'venue'` дырок в модели не создаёт; (2) архив по-источниковых (per-venue) значений НЕ хранит и хранить НЕ будет — это не вопрос приоритета."
+    },
+    "MarketDataUnit": {
+      "type": "string",
+      "enum": [
+        "base",
+        "quote",
+        "usd"
+      ],
+      "description": "Единица измерения значения (open_interest/taker_volume). Общий тип для обоих видов — DRY-страховка: если бы `unit` был отдельным литералом в каждом интерфейсе, набор единиц двух видов мог бы незаметно разъехаться правкой одного и забытым вторым."
+    },
+    "LiquidationsMarketDataRequirement": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "liquidations"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instrument": {
+          "$ref": "#/definitions/InstrumentRef"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationUs"
+        },
+        "lookback": {
+          "type": "number"
+        },
+        "revisionPolicy": {
+          "$ref": "#/definitions/RevisionPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "instrument",
+        "interval",
+        "lookback",
+        "revisionPolicy",
+        "scope"
+      ],
+      "additionalProperties": false,
+      "description": "Ликвидации — interval aggregate за закрытый бакет (см. `MarketLiquidationsBucketClosedEvent`)."
+    },
+    "TakerVolumeMarketDataRequirement": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "taker_volume"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instrument": {
+          "$ref": "#/definitions/InstrumentRef"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationUs"
+        },
+        "lookback": {
+          "type": "number"
+        },
+        "revisionPolicy": {
+          "$ref": "#/definitions/RevisionPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        },
+        "unit": {
+          "$ref": "#/definitions/MarketDataUnit"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "instrument",
+        "interval",
+        "lookback",
+        "revisionPolicy",
+        "scope",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "description": "Taker-объём — interval aggregate (см. `MarketTakerVolumeBucketClosedEvent`)."
+    },
+    "FundingMarketDataRequirement": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "funding"
+        },
+        "id": {
+          "type": "string"
+        },
+        "instrument": {
+          "$ref": "#/definitions/InstrumentRef"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationUs"
+        },
+        "lookback": {
+          "type": "number"
+        },
+        "revisionPolicy": {
+          "$ref": "#/definitions/RevisionPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        },
+        "form": {
+          "type": "string",
+          "enum": [
+            "rate",
+            "settlement"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "instrument",
+        "interval",
+        "lookback",
+        "revisionPolicy",
+        "scope",
+        "form"
+      ],
+      "additionalProperties": false,
+      "description": "Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent` — на уровне СОБЫТИЯ они структурно неотличимы, различение живёт на ПОДПИСКЕ, то есть здесь).\n\n`form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — НЕ потому что это временно не реализовано, а потому что соответствующего датасета ФИЗИЧЕСКИ не существует: в архиве нет колонки settlement. Это свойство архива, а не политика — как только появится колонка, `form: 'settlement'` резолвится без изменения формы этого типа."
     },
     "CapabilityDeclaration": {
       "type": "object",

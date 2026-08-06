@@ -27,6 +27,7 @@
 //   ниже). Сам состав `orders()`/`position()` в `ActorContext` эта задача (S1/2) НЕ вводит —
 //   заглушка ждёт задачу 5.
 
+import { MARKET_DATA_KINDS, type MarketDataKind } from '../contract/constants.js';
 import type { Bar } from './context.js';
 import type {
   FundingReading,
@@ -526,11 +527,231 @@ export type ActorCommandKind = (typeof ACTOR_COMMAND_KINDS)[number];
 export type ActorCommandBatch = readonly ActorCommand[];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MarketDataRequirement — S1 задача 3: закрытый каталог рыночных данных на пять видов.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Стратегия объявляет СМЫСЛ данных, а не МЕСТО их покупки: `MarketDataRequirement` НЕ несёт поля
+// `provider`/`sourceRef` — конкретный источник выбирает host/run plan цепочкой
+// `MarketDataRequirement → SubscriptionBinding → ProviderAdapter → канонические market events`
+// (задача 3 отвечает только за первое звено; резолвер целиком — host/run-plan сущность, см.
+// комментарий у `DeclaredDatasetSplice` ниже). Две оси намеренно разные, не одна в двух видах:
+// `kind` — ЗАКРЫТЫЙ каталог, ядро обязано его валидировать fail-closed; `sourceRef` (живёт в
+// evidence, НЕ здесь) — ОТКРЫТАЯ строка, ядро обязано её НЕ понимать. Смешать их в одном поле
+// значило бы либо молча закрыть открытую ось, либо открыть закрытую — оба варианта нарушают
+// инвариант задачи, поэтому в этом файле `sourceRef`/`provider` не появляются вовсе.
+
+/**
+ * Минимальная ссылка на инструмент. Состав НЕ угадывается здесь — резолвер (задача 8, host/run
+ * plan) спроектирует полный instrument-mapping отдельно; пока хватает пары, однозначно
+ * идентифицирующей рынок для `interval`/`lookback` ниже.
+ */
+export interface InstrumentRef {
+  readonly venue: string;
+  readonly symbol: string;
+}
+
+/**
+ * Область агрегации значения. Тип ОСТАЁТСЯ двузначным, чтобы будущее добавление `'venue'` не было
+ * ломающим изменением формы — но валидатор в v1 (`validate-module.ts`) ОТВЕРГАЕТ `'venue'`, а не
+ * молча не находит данные (`unsupported_market_data_scope`).
+ *
+ * Решение владельца 2026-08-06, обе причины — свойство данных, НЕ временный пробел реализации:
+ * (1) ликвидационный каскад — явление РЫНОЧНОЕ, а не биржевое, и агрегат по восьми биржам ловит
+ * его полнее и раньше любой отдельной книги; стакан этот контракт не моделирует (исполнение —
+ * worst-case барными филлами), поэтому отсутствие `'venue'` дырок в модели не создаёт; (2) архив
+ * по-источниковых (per-venue) значений НЕ хранит и хранить НЕ будет — это не вопрос приоритета.
+ */
+export type Scope = 'venue' | 'aggregate';
+
+/**
+ * Единица измерения значения (open_interest/taker_volume). Общий тип для обоих видов —
+ * DRY-страховка: если бы `unit` был отдельным литералом в каждом интерфейсе, набор единиц двух
+ * видов мог бы незаметно разъехаться правкой одного и забытым вторым.
+ */
+export type MarketDataUnit = 'base' | 'quote' | 'usd';
+
+/**
+ * Capability-политика ревизий значения (требование 4 задачи 3). В v1 валидатор принимает ТОЛЬКО
+ * `{ mode: 'final_only' }` (`unsupported_revision_policy` иначе) — не потому что данные
+ * невозможны, а потому что `provisional_and_revisions` НЕ РЕАЛИЗОВАН в v1 (это единственная из
+ * трёх v1-отклонений задачи 3, которая — политика/дорожная карта, а не свойство архива;
+ * funding-settlement и `scope:'venue'` ниже — наоборот, свойство архива, см. их док-комментарии).
+ * Поле входит в форму СРАЗУ, чтобы будущая реализация ревизий не потребовала ломающего добавления
+ * поля — симметрично тому, как `ObservedValue.finality`/`revision` уже несёт оба поля в v1.
+ */
+export type RevisionPolicy =
+  | { readonly mode: 'final_only' }
+  | { readonly mode: 'provisional_and_revisions' };
+
+// Общие поля пяти требований ниже — ПОВТОРЕНЫ в каждом варианте union'а, а не унаследованы через
+// `extends` общего интерфейса: та же дисциплина, что у семейства `ActorInputEvent` выше (ни один
+// `Market*Event`/`Actor*Event` не использует `extends`). Причина не только стилевая — экспортный
+// интерфейс, наследующий НЕэкспортный базовый через `extends`, ломает генерацию `.d.ts`
+// (`declaration: true`, tsconfig.json): базовое имя «протекало» бы в объявление, оставаясь при
+// этом недоступным импортёру. Разница по сравнению с брифом (там `RequirementBase` дан как
+// иллюстрация) — обе формы структурно эквивалентны, эта безопасна по построению.
+//
+// - `id` — идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг
+//   при резолве, задача 8, а не автор манифеста).
+// - `instrument` — какой инструмент (см. `InstrumentRef`).
+// - `interval` — гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная
+//   внутренняя единица; НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом).
+// - `lookback` — сколько истории проекция ядра ОБЯЗАНА держать.
+// - `revisionPolicy` — см. `RevisionPolicy` выше.
+
+/** Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`. */
+export interface CandlesMarketDataRequirement {
+  readonly kind: 'candles';
+  readonly id: string;
+  readonly instrument: InstrumentRef;
+  readonly interval: DurationUs;
+  readonly lookback: number;
+  readonly revisionPolicy: RevisionPolicy;
+  readonly priceType: 'trade';
+}
+
+/** Open interest — point observation (см. `MarketOpenInterestObservedEvent`, задача 2). */
+export interface OpenInterestMarketDataRequirement {
+  readonly kind: 'open_interest';
+  readonly id: string;
+  readonly instrument: InstrumentRef;
+  readonly interval: DurationUs;
+  readonly lookback: number;
+  readonly revisionPolicy: RevisionPolicy;
+  readonly scope: Scope;
+  readonly unit: MarketDataUnit;
+}
+
+/** Ликвидации — interval aggregate за закрытый бакет (см. `MarketLiquidationsBucketClosedEvent`). */
+export interface LiquidationsMarketDataRequirement {
+  readonly kind: 'liquidations';
+  readonly id: string;
+  readonly instrument: InstrumentRef;
+  readonly interval: DurationUs;
+  readonly lookback: number;
+  readonly revisionPolicy: RevisionPolicy;
+  readonly scope: Scope;
+}
+
+/** Taker-объём — interval aggregate (см. `MarketTakerVolumeBucketClosedEvent`). */
+export interface TakerVolumeMarketDataRequirement {
+  readonly kind: 'taker_volume';
+  readonly id: string;
+  readonly instrument: InstrumentRef;
+  readonly interval: DurationUs;
+  readonly lookback: number;
+  readonly revisionPolicy: RevisionPolicy;
+  readonly scope: Scope;
+  readonly unit: MarketDataUnit;
+}
+
+/**
+ * Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent`
+ * — на уровне СОБЫТИЯ они структурно неотличимы, различение живёт на ПОДПИСКЕ, то есть здесь).
+ *
+ * `form: 'settlement'` в v1 НЕ РЕЗОЛВИТСЯ (`unsupported_funding_form`) — НЕ потому что это
+ * временно не реализовано, а потому что соответствующего датасета ФИЗИЧЕСКИ не существует: в
+ * архиве нет колонки settlement. Это свойство архива, а не политика — как только появится
+ * колонка, `form: 'settlement'` резолвится без изменения формы этого типа.
+ */
+export interface FundingMarketDataRequirement {
+  readonly kind: 'funding';
+  readonly id: string;
+  readonly instrument: InstrumentRef;
+  readonly interval: DurationUs;
+  readonly lookback: number;
+  readonly revisionPolicy: RevisionPolicy;
+  readonly scope: Scope;
+  readonly form: 'rate' | 'settlement';
+}
+
+/** Замкнутый union требований к рыночным данным формы `event_driven` (закрытый каталог, требование 1). */
+export type MarketDataRequirement =
+  | CandlesMarketDataRequirement
+  | OpenInterestMarketDataRequirement
+  | LiquidationsMarketDataRequirement
+  | TakerVolumeMarketDataRequirement
+  | FundingMarketDataRequirement;
+
+/**
+ * Двусторонняя типовая гарантия «`MARKET_DATA_KINDS` ⇔ `MarketDataRequirement['kind']`» — та же
+ * идиома, что `ACTOR_INPUT_EVENT_KINDS`/`ActorInputEvent` выше (раунд правок 1, I-1), применённая
+ * к каталогу задачи 3. `const x: T[] = []` для этой цели НЕ годится (пустой литерал присваивается
+ * любому `T[]`, ничего не проверяя — перепроверено эмпирически при разборе задачи 2). Массив живёт
+ * в `contract/constants.ts` (единственный источник истины, требование 1) и объявлен раньше, чем
+ * существует `MarketDataRequirement` (`constants.ts` не может импортировать `event-driven.ts` —
+ * цикл), поэтому направление «массив ⊆ union» проверяется ЗДЕСЬ, а не в месте объявления массива.
+ */
+const _marketDataKindsCoverRequirementUnion =
+  MARKET_DATA_KINDS satisfies readonly MarketDataRequirement['kind'][];
+
+/**
+ * Направление «union ⊆ массив»: вариант `MarketDataRequirement`, чей `kind` забыли дописать в
+ * `MARKET_DATA_KINDS`, не удовлетворяет `extends never` и ломает сборку здесь (TS2344).
+ */
+type _AssertNoUncoveredMarketDataKind = AssertNoUncoveredKind<
+  Exclude<MarketDataRequirement['kind'], MarketDataKind>
+>;
+
+/**
+ * Явное declared-склеивание истории поперёк границы `datasetId` (требование 5 задачи 3). Прогон
+ * НЕ МОЖЕТ молча пересечь границу: агрегат из восьми бирж и агрегат внешнего провайдера — РАЗНЫЕ
+ * величины, а не одна с разной точностью; окно на 90 дней через такой переход дало бы результат,
+ * которого нет ни на одном источнике по отдельности.
+ *
+ * Форма ЗДЕСЬ фиксирует только ЧТО можно объявить (два `datasetId` + момент перехода) и повод для
+ * кода отказа `dataset_boundary_violation` (`research-contract/validation.ts`), которым размечается
+ * НЕобъявленный переход. Саму проверку — что запрошенное окно действительно не пересекает
+ * необъявленную границу — исполняет run plan (host-сущность), НЕ `sdk` (требование 8 ниже:
+ * резолвер целиком вне `sdk`).
+ */
+export interface DeclaredDatasetSplice {
+  readonly fromDatasetId: string;
+  readonly toDatasetId: string;
+  /** Момент перехода: точки строго ДО этого ts принадлежат `fromDatasetId`, начиная с него — `toDatasetId`. */
+  readonly boundaryTsUs: TimestampUs;
+  /** Почему склейка обоснована (например: миграция провайдера, замена источника на равноценный). */
+  readonly rationale: string;
+}
+
+// Требование к резолверу (задача 8; host/run-plan сущность — здесь только ЗАПИСАНО, НЕ
+// реализовано, поэтому ниже НЕ JSDoc: этот абзац не документирует ни один экспортируемый тип).
+// Резолвер обязан быть fail-closed ПО ВСЕМ семантически значимым измерениям: `kind`, `scope`,
+// `unit`, instrument mapping, interval/granularity, finality/revision policy, coverage.
+// Агрегированный OI и venue-OI различаются не только смыслом, но и ПОРЯДКОМ ВЕЛИЧИНЫ; неявное
+// агрегирование, конверсия единиц или подмена venue ↔ aggregate допустимы ТОЛЬКО как отдельный
+// версионированный transform с НОВЫМ `datasetId` — никогда как молчаливая подстановка внутри
+// резолва одного и того же требования. Сам резолвер (`MarketDataRequirement →
+// SubscriptionBinding → ProviderAdapter`) — host/run-plan сущность; в `sdk` его нет и не будет.
+
+/**
+ * Готовность актора к ТОРГОВЫМ правам (требование 6 задачи 3). До `'ready'` хост ОБЯЗАН отклонять
+ * команды `place` — но события всё равно доставляются, чтобы проекции и авторское состояние
+ * успевали построиться К моменту готовности (иначе первый торгующий бар был бы недетерминирован:
+ * его решение зависело бы от того, сколько истории актор случайно успел увидеть). Реализация
+ * прогрева — S2; здесь только ФОРМА, которую видит актор через `ActorContext.readiness`.
+ */
+export type ActorReadiness = 'warming_up' | 'ready';
+
+/**
+ * Источник прогрева актора ДО первого торгового бара (требование 6 задачи 3). Выбор фиксируется
+ * В КОНТРАКТЕ, а НЕ на деплое: от него зависит, что именно актор успеет увидеть до готовности —
+ * то есть детерминизм первого торгующего бара. Реализации прогрева здесь НЕТ (S2); тип фиксирует
+ * только сам выбор.
+ *
+ * - `tape_replay` — прогрев реплеем исторической ленты: актор строит проекции/состояние из уже
+ *   прошедших событий так, как если бы они доставлялись в реальном времени.
+ * - `kernel_prefetch` — прогрев префетчем ядра: движок материализует нужное окно истории и
+ *   передаёт готовое состояние без пере-проигрывания событий через `onEvent`.
+ */
+export type ActorWarmupSource = { readonly kind: 'tape_replay' } | { readonly kind: 'kernel_prefetch' };
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Актор.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Read-only контекст актора — МИНИМАЛЬНАЯ форма на эту задачу (S1/задача 2).
+ * Read-only контекст актора — МИНИМАЛЬНАЯ форма на задачи S1/2 и S1/3.
  *
  * Заведена как заглушка ИМЕННО под задачу 5: без неё `StrategyActor`/`ActorHandlers` перестали
  * бы типизироваться после сноса старой формы (`ctx.orders.open()`/`ctx.position()`, реконструкция
@@ -538,10 +759,14 @@ export type ActorCommandBatch = readonly ActorCommand[];
  * ctx (composition-following, инвариант state-before-handler) спроектирует задача 5 отдельно.
  * `clock.nowUs()`/`rng.next()` — минимум, без которого не типизируется вообще ничего: без
  * детерминированных часов и RNG хендлер не может быть детерминированным по определению (CH-5).
+ * `readiness` (задача 3, требование 6) — единственное поле сверх минимума: без него команда
+ * `place` не может быть отклонена ДО прогрева НИГДЕ, кроме как по неявному соглашению хоста, а
+ * события при этом обязаны доставляться уже сейчас (см. `ActorReadiness` выше).
  */
 export interface ActorContext {
   readonly clock: { nowUs(): TimestampUs };
   readonly rng: { next(): number };
+  readonly readiness: ActorReadiness;
 }
 
 /**

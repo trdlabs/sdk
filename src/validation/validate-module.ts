@@ -84,6 +84,61 @@ const NONDETERMINISM_NEEDS = ['wallClock', 'uncontrolledRandom'] as const;
 /** Структурные point-in-time потребности 017 (всегда легитимны). */
 const STRUCTURAL_NEEDS = ['closedCandlesUpToCurrent', 'asOfIndicators'] as const;
 
+/**
+ * 083 S1 задача 3 — семантика `manifest.marketData`, которую JSON-схема (шаг 1) не выражает:
+ * `scope: 'venue'` и `revisionPolicy.mode: 'provisional_and_revisions'` и `funding.form:
+ * 'settlement'` — все ТИПОВО легальные значения (схема их пропустит), отклоняются здесь
+ * fail-closed по данным/дорожной карте (см. doc-комментарии `Scope`/`RevisionPolicy`/
+ * `FundingMarketDataRequirement` в `event-driven.ts` — там же зафиксировано, какое из трёх
+ * отклонений — временное (`provisional_and_revisions`, дорожная карта), а какие два —
+ * постоянное свойство архива (venue-scope, funding-settlement)).
+ *
+ * Вход НЕ типизирован как `MarketDataRequirement[]` намеренно: на входе валидатора — недоверенный
+ * JSON, а не типизированное значение (та же дисциплина, что `asRecord`/`dataNeeds` выше). Элемент,
+ * структурно не дотягивающий до объекта, здесь молча пропускается — за него уже отвечает
+ * `schema_invalid` (шаг 1).
+ */
+function validateMarketDataRequirements(marketData: unknown, issues: ValidationIssue[]): void {
+  if (!Array.isArray(marketData)) return;
+  marketData.forEach((entry, i) => {
+    const req = asRecord(entry);
+    if (req === null) return;
+    const base = `/marketData/${i}`;
+
+    if (req.scope === 'venue') {
+      issues.push(
+        makeIssue(
+          'unsupported_market_data_scope',
+          `scope "venue" не резолвится в v1 — архив не хранит и не будет хранить по-источниковые ` +
+            `значения (kind "${String(req.kind)}")`,
+          `${base}/scope`,
+        ),
+      );
+    }
+
+    const revisionPolicy = asRecord(req.revisionPolicy);
+    if (revisionPolicy !== null && revisionPolicy.mode === 'provisional_and_revisions') {
+      issues.push(
+        makeIssue(
+          'unsupported_revision_policy',
+          'revisionPolicy.mode "provisional_and_revisions" не реализован в v1 (принимается только final_only)',
+          `${base}/revisionPolicy/mode`,
+        ),
+      );
+    }
+
+    if (req.kind === 'funding' && req.form === 'settlement') {
+      issues.push(
+        makeIssue(
+          'unsupported_funding_form',
+          'funding с form "settlement" не резолвится в v1: соответствующего датасета (колонки settlement) в архиве нет',
+          `${base}/form`,
+        ),
+      );
+    }
+  });
+}
+
 /** Пометить любые поля зоны risk/execution на верхнем уровне `obj` как `separation_violation`. */
 function scanSeparation(
   obj: Record<string, unknown>,
@@ -421,6 +476,21 @@ export function validateModule(
   if (Array.isArray(input.sampleDecisions)) {
     validateSampleDecisions(manifest, input.sampleDecisions, registry, issues);
   }
+
+  // 7. marketData (083 S1 задача 3): обязательность для event_driven + семантика scope/
+  // revisionPolicy/funding-form, которую схема не выражает (см. validateMarketDataRequirements).
+  const marketDataRaw: unknown = manifest.marketData;
+  const hasMarketData = Array.isArray(marketDataRaw) && marketDataRaw.length > 0;
+  if (manifest.kind === 'strategy' && lifecycleKnown && lifecycle === 'event_driven' && !hasMarketData) {
+    issues.push(
+      makeIssue(
+        'missing_market_data_requirement',
+        'форма event_driven обязана объявлять хотя бы одно требование marketData',
+        '/marketData',
+      ),
+    );
+  }
+  validateMarketDataRequirements(marketDataRaw, issues);
 
   const hasError = issues.some((i) => i.severity === 'error');
   return assemble(issues, hasError ? undefined : normalizeManifest(manifest));
