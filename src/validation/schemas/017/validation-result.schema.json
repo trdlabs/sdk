@@ -105,6 +105,10 @@
         "observation_revision_finalized",
         "observation_revision_skipped",
         "observation_revision_regressed",
+        "observation_revision_invalid",
+        "observation_revision_key_mismatch",
+        "observation_revision_start_invalid",
+        "observation_finality_demoted",
         "observation_archive_row_corrupt",
         "empty_baseline_variant_diff"
       ],

@@ -67,15 +67,30 @@ export type ValidationCode =
   // Тот же номер ревизии с ДРУГИМ содержимым — два разных значения под одним номером физически
   // означают повреждённый поток, а не переиграть детерминированно (см. `checkRevisionTransition`).
   | 'observation_revision_conflict'
-  // Переход запрошен ПОСЛЕ `final` — `final` терминален в v1 (см. doc `finality`,
-  // `observation-status.ts`); ревизии после final структурно не ожидаются вовсе.
+  // Переход запрошен ПОСЛЕ `final` (revision изменился) — `final` терминален в v1 (см. doc
+  // `finality`, `observation-status.ts`); новая ревизия после final структурно не ожидается вовсе.
   | 'observation_revision_finalized'
-  // Ревизия не начинается с 0 либо перескакивает номер без явно объявленной `DeclaredRevisionSkipPolicy`
-  // — fail-closed по умолчанию, «не молча» (требование 2 задачи 4).
+  // Ревизия перескочила номер ПОСРЕДИ потока без явно объявленной `DeclaredRevisionSkipPolicy` —
+  // fail-closed по умолчанию, «не молча» (требование 2 задачи 4). ОТДЕЛЬНЫЙ код от
+  // `observation_revision_start_invalid` ниже (ревью M-7): потребитель, различающий по коду,
+  // обязан отличить «не начали с 0» от «перескочили номер в середине».
   | 'observation_revision_skipped'
   // Ревизия УБЫВАЕТ (`next.revision < previous.revision`) — нарушение монотонности внутри
   // `(subscriptionId, effectiveTsUs)`.
   | 'observation_revision_regressed'
+  // `revision` не целое неотрицательное число (`NaN`/дробь/отрицательное) — недоверенный источник,
+  // TS-тип `number` этого не запрещает (ревью I-1, см. `isValidRevisionNumber`).
+  | 'observation_revision_invalid'
+  // `previous.effectiveTsUs !== next.effectiveTsUs` — сравниваются наблюдения под разными ключами
+  // `(subscriptionId, effectiveTsUs)`, кеевание перепутано выше по стеку (ревью I-4).
+  | 'observation_revision_key_mismatch'
+  // Первое наблюдение ключа несёт `revision !== 0` без объявленной `skipPolicy` — отдельно от
+  // `observation_revision_skipped` (ревью M-7, см. выше).
+  | 'observation_revision_start_invalid'
+  // `finality` снята с `final` на `provisional` при том же `revision` и том же содержимом —
+  // терминальность нарушена в ОБРАТНУЮ сторону (снятие окончательности — новая информация, не
+  // повторная доставка; уточнение владельца M-3, `checkRevisionTransition`).
+  | 'observation_finality_demoted'
   // --- error (083 S1 задача 4, аддитивно; гейт валидности строки архива `parseArchiveRow`) ---
   // `(hasKind, value)` в одной из двух комбинаций, которые схема архива допускает физически
   // (колонки независимы), но которые не могут быть правдой одновременно — fail-closed, а не

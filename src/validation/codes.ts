@@ -38,6 +38,10 @@ export const CODE_SEVERITY: Readonly<Record<ValidationCode, Severity>> = {
   observation_revision_finalized: 'error',
   observation_revision_skipped: 'error',
   observation_revision_regressed: 'error',
+  observation_revision_invalid: 'error',
+  observation_revision_key_mismatch: 'error',
+  observation_revision_start_invalid: 'error',
+  observation_finality_demoted: 'error',
   observation_archive_row_corrupt: 'error',
   empty_baseline_variant_diff: 'warning',
 };
