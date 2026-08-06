@@ -166,10 +166,36 @@ function isExecutionLedgerFundingSettlementEntry(
  * Рантайм-проверка ОДНОЙ записи ledger'а (требование I-5 ревью раунда 1) — та же дисциплина, что
  * `isPlainActorState` (`event-driven.ts`): недоверенное значение проверяется целиком, полю за
  * полем, белым списком по `kind`/`side`, а не молча приводится типом вызывающего.
+ *
+ * OR-цепочка двух ПО-ОТДЕЛЬНОСТИ проверенных предикатов (не `switch`, у него здесь нет
+ * дискриминанта — `value` НЕ типа `ExecutionLedgerEntry`, а `unknown`, и переключаться в `switch`
+ * буквально не на чем без предварительного сужения). Полноту вместо этого гарантирует ТИПОВАЯ
+ * проверка ниже (Minor, ревью раунда 2): мутационная проба, добавляющая ТРЕТИЙ вариант в
+ * `ExecutionLedgerEntry` без обновления этой функции, иначе заставила бы предикат МОЛЧА ВРАТЬ —
+ * отклонять структурно валидные (по обновлённому типу) записи, потому что для их `kind` нет
+ * проверяющей ветки. `_AssertExecutionLedgerEntryKindsCovered` красит СБОРКУ в этом случае, той же
+ * идиомой, что `AssertNoUncoveredKind`/`ACTOR_INPUT_EVENT_KINDS`, `event-driven.ts` (I-1 задачи S1).
  */
 export function isExecutionLedgerEntry(value: unknown): value is ExecutionLedgerEntry {
   return isExecutionLedgerFillEntry(value) || isExecutionLedgerFundingSettlementEntry(value);
 }
+
+/** Генерик-ограничение (не рантайм-значение) — локальная копия идиомы `AssertNoUncoveredKind`
+ *  (`event-driven.ts`): компилируется, только если `T` действительно `never`. Не импортирована
+ *  оттуда, чтобы не заводить обратный импорт `actor-state.ts ⇐ event-driven.ts` (см. doc в шапке
+ *  файла про уже существующую одностороннюю зависимость) ради двухстрочной типовой утилиты. */
+type AssertNoUncoveredEntryKind<T extends never> = T;
+
+/**
+ * Проверенные в `isExecutionLedgerEntry` виды — ровно ДВА, перечислены здесь ЯВНО (не выведены из
+ * рантайм-массива: рантайм-массив ради ЧИСТО типовой проверки завёл бы лишнее рантайм-ребро в
+ * публикуемом пакете, тот же принцип, что `_AssertMarketDataKindCoveredByUnion`, `event-driven.ts`,
+ * задача 3, раунд правок 2, м-3). Если `ExecutionLedgerEntry` получит третий вариант, а эту строку
+ * не обновят, `Exclude<...>` перестанет быть `never`, и сборка ломается здесь же (TS2344).
+ */
+type _AssertExecutionLedgerEntryKindsCovered = AssertNoUncoveredEntryKind<
+  Exclude<ExecutionLedgerEntry['kind'], 'fill' | 'funding_settlement'>
+>;
 
 /** Рантайм-проверка ВСЕГО ledger'а — массив, каждый элемент которого проходит `isExecutionLedgerEntry`. */
 export function isExecutionLedger(value: unknown): value is ExecutionLedger {
@@ -181,36 +207,61 @@ export function isExecutionLedger(value: unknown): value is ExecutionLedger {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Допуск для сравнения остатка позиции с нулём (ревью раунда 1, C-1, Critical). Плавающая точка
- * ГАРАНТИРОВАННО не даёт точного нуля на дробных лестницах (`0.1 + 0.2 - 0.3 !== 0` в IEEE754,
- * побитово) — сравнение `=== 0` здесь неприменимо НЕ по недосмотру, а по устройству арифметики с
- * плавающей точкой: прогон ревью на реальной лестнице тейк-профитов (`0.15` тремя траншами по
- * `0.05`) дал остаток `1.3877787807814457e-17` с ФИКТИВНЫМ флипом через ноль (позиция «закрыта
- * полностью» отчиталась новым `openedAt`, которого не было).
+ * Относительный допуск для сравнения количества с нулём (ревью раунда 2, C-1, Critical —
+ * ВОСПРОИЗВЕДЕНО ПОВТОРНО против собранного пакета после первой правки). Первая версия
+ * (`POSITION_QTY_EPSILON = 1e-9` АБСОЛЮТНЫЙ) чинила дробные лестницы, но `qty` измеряется в
+ * базовой валюте, чей масштаб гуляет на много порядков между инструментами — `ulp(x)` уже
+ * превышает `1e-9` при `x ≈ 4.5e6` (мемкоин-перп позиции в 1e8–1e9 базовых единиц — обычное
+ * дело), и АБСОЛЮТНЫЙ порог на таком масштабе снова даёт фиктивный флип: прогон ревью, лестница
+ * `987654321.7` двадцатью равными траншами, остаток `-2.24e-7` — больше `1e-9`, флип не пойман.
+ * Больший константный порог не решает задачу — только сдвигает точку перехода на другой масштаб.
  *
- * Величина — `1e-9`: на два порядка меньше минимального шага размера ордера реальных venue
- * (satoshi-класс точности, `1e-8` BTC) — допуск не должен поглотить легитимный дробный остаток
- * целиком, только шум округления IEEE754 (типично `~1e-16`..`~1e-17` на операцию).
+ * Решение — допуск ОТНОСИТЕЛЬНЫЙ к пиковому `|qty|` ВНУТРИ ТЕКУЩЕЙ ЭРЫ (не всего ledger'а: разные
+ * эры — разные позиции, разные уместные масштабы шума), см. `isNegligibleQty` и `FoldState.
+ * peakAbsQty` ниже. Величина — `1e-9` относительно масштаба, а не абсолютная: для масштаба `≥1`
+ * это `≥1e-9 × qty`, безопасный запас над накопленной IEEE754-ошибкой (одна операция даёт
+ * относительную ошибку порядка `Number.EPSILON ≈ 2.22e-16`; ошибка на ~20 операциях остаётся на
+ * много порядков ниже `1e-9`, что и подтверждает прогон ревью — относительная ошибка лестницы
+ * `987654321.7`/20 составляет `~3.7e-16`, то есть порядка ОДНОГО `Number.EPSILON`, не более).
+ * `Math.max(scale, 1)` — ПОЛ: при масштабе меньше `1` допуск не сжимается ниже абсолютного `1e-9`
+ * — тот же порядок, что был константой раунда 1, и та же причина (запас на IEEE754-шум, на ОДИН
+ * порядок меньше минимального шага размера ордера реальных venue, satoshi-класс `1e-8` BTC — не
+ * на два: `1e-8 / 1e-9 = 10`, предыдущая версия доки здесь ошиблась в арифметике).
  */
-export const POSITION_QTY_EPSILON = 1e-9;
+export const POSITION_QTY_RELATIVE_EPSILON = 1e-9;
 
-function isNearZero(qty: number): boolean {
-  return Math.abs(qty) < POSITION_QTY_EPSILON;
+/**
+ * «Пренебрежимо мало» — величина неотличима от нуля ОТНОСИТЕЛЬНО масштаба `scale` (пиковый `|qty|`
+ * текущей эры, floor `1`). Единственная функция сравнения количества с нулём во всём модуле —
+ * применяется СИММЕТРИЧНО и к ЗАКРЫТИЮ (остаток после выхода), и к ОТКРЫТИЮ (сам исполненный
+ * размер относительно себя же, `scale = |fillSigned|`), и к финальному чтению `derivePositionView`
+ * (ревью раунда 2, C-1, второе следствие): прежняя версия сравнивала «flat» ДВУМЯ разными
+ * предикатами — `foldFill` эпсилоном, финальная проверка точным `state.qtySigned === 0` — из-за
+ * чего суб-эпсилонное ОТКРЫТИЕ (`buy 1e-10` с чистого места) не схлопывалось вовсе (просто
+ * присваивало `qtySigned` без всякой проверки), а суб-эпсилонный ВЫХОД схлопывался: одна и та же
+ * по масштабу величина трактовалась по-разному в зависимости от направления. Теперь один порог,
+ * одна функция, каждое место сравнения.
+ */
+function isNegligibleQty(value: number, scale: number): boolean {
+  return Math.abs(value) <= POSITION_QTY_RELATIVE_EPSILON * Math.max(scale, 1);
 }
 
 /**
  * Промежуточное состояние свёртки: `qtySigned` — остаток со знаком (`> 0` long, `< 0` short,
- * `=== 0` flat — РОВНО ноль: `foldFill` ниже СНИМАЕТ float-шум через `isNearZero` до того, как
- * записать его в `qtySigned`, поэтому здесь `=== 0` уже безопасно), `avgPrice`/`openedAtUs` —
- * характеристики ТЕКУЩЕЙ эры (не определены, пока `qtySigned === 0`).
+ * `=== 0` flat — РОВНО ноль: `foldFill` ниже СНИМАЕТ float-шум через `isNegligibleQty` до того,
+ * как записать его в `qtySigned`, поэтому здесь `=== 0` уже безопасно), `avgPrice`/`openedAtUs` —
+ * характеристики ТЕКУЩЕЙ эры (не определены, пока `qtySigned === 0`). `peakAbsQty` — пиковый
+ * `|qtySigned|`, достигнутый С НАЧАЛА ТЕКУЩЕЙ ЭРЫ (сбрасывается на каждом новом открытии/флипе) —
+ * масштаб для `isNegligibleQty` (C-1, ревью раунда 2).
  */
 interface FoldState {
   readonly qtySigned: number;
   readonly avgPrice: number;
   readonly openedAtUs: TimestampUs | undefined;
+  readonly peakAbsQty: number;
 }
 
-const FLAT_STATE: FoldState = { qtySigned: 0, avgPrice: 0, openedAtUs: undefined };
+const FLAT_STATE: FoldState = { qtySigned: 0, avgPrice: 0, openedAtUs: undefined, peakAbsQty: 0 };
 
 function signedQtyOf(entry: ExecutionLedgerFillEntry): number {
   return entry.side === 'buy' ? entry.qty : -entry.qty;
@@ -225,25 +276,36 @@ function sameSign(a: number, b: number): boolean {
  * позиции — не одна формула на все случаи, потому что «добавление» и «выход» обновляют РАЗНЫЕ
  * поля (добавление меняет `avgPrice`, выход его СОХРАНЯЕТ), а флип обнуляет оба разом:
  *
- * 1. Старт с flat (`qtySigned === 0`) — новая эра целиком: `avgPrice`/`openedAtUs` берутся с
- *    этого филла.
+ * 1. Старт с flat (`qtySigned === 0`) — потенциально новая эра. `isNegligibleQty` ПРИМЕНЯЕТСЯ И
+ *    ЗДЕСЬ (C-1, ревью раунда 2, симметрия открытия/закрытия, см. `isNegligibleQty`): если сам
+ *    `fillSigned` неотличим от нуля относительно себя же (масштаб — его собственная величина,
+ *    поэтому реальный срабатывает только АБСОЛЮТНЫЙ пол — см. doc), это шум, а не открытие — эра
+ *    не начинается. Иначе `avgPrice`/`openedAtUs`/`peakAbsQty` берутся с этого филла.
  * 2. Тот же знак, что текущий остаток (добавление в ТУ ЖЕ сторону) — средневзвешенная цена
- *    пересчитывается по ОБЪЁМУ (не по количеству филлов), `openedAtUs` НЕ меняется — эра та же.
- * 3. Противоположный знак (выход, полный либо частичный). `isNearZero` ПЕРВЫМ (C-1, Critical —
- *    порядок проверок важен: на дробных количествах точный `remainingSigned === 0` ПОЧТИ НИКОГДА
- *    не выполняется побитово, а знак float-шума случаен, из-за чего проверка знака ДО проверки
- *    «около нуля» иногда давала ФИКТИВНЫЙ флип на закрытии дробной позиции): около нуля — эра
- *    закончилась, `qtySigned` СНИМАЕТСЯ до ровно `0`, `avgPrice`/`openedAtUs` сохраняются про запас
- *    (следующая новая эра их всё равно перезапишет с чистого места). Иначе — знак остатка совпадает
- *    со знаком ДО: выход из ТОЙ ЖЕ эры, `avgPrice`/`openedAtUs` держатся. Иначе — знак ПЕРЕВЁРНУТ:
- *    ФЛИП через ноль, часть филла, превышающая прежний остаток, открывает НОВУЮ эру ПО ЦЕНЕ и
- *    ВРЕМЕНИ ЭТОГО ЖЕ филла — ровно требование брифа «openedAt от НОВОГО открытия, а не от исходного».
+ *    пересчитывается по ОБЪЁМУ (не по количеству филлов), `openedAtUs` НЕ меняется — эра та же;
+ *    `peakAbsQty` обновляется на новый (больший) остаток.
+ * 3. Противоположный знак (выход, полный либо частичный). `isNegligibleQty` ПЕРВЫМ (C-1 — порядок
+ *    проверок важен: точный `remainingSigned === 0` почти никогда не выполняется побитово на
+ *    накопленной арифметике, а знак шума случаен, из-за чего проверка знака ДО проверки «около
+ *    нуля» иногда давала ФИКТИВНЫЙ флип): около нуля относительно `peakAbsQty` ЭТОЙ эры — эра
+ *    закончилась, состояние СНИМАЕТСЯ до `FLAT_STATE` целиком (не только `qtySigned`: `peakAbsQty`
+ *    тоже обязан обнулиться — иначе следующее ОТКРЫТИЕ унаследовало бы чужой масштаб эры и
+ *    измеряло бы себя относительно позиции, которой уже нет). Иначе — знак остатка совпадает со
+ *    знаком ДО: выход из ТОЙ ЖЕ эры, `avgPrice`/`openedAtUs` держатся, `peakAbsQty` НЕ уменьшается
+ *    (выход не может увеличить пик, а уменьшать пик задним числом значило бы менять масштаб
+ *    сравнения для уже случившихся шагов). Иначе — знак ПЕРЕВЁРНУТ: ФЛИП через ноль, часть филла,
+ *    превышающая прежний остаток, открывает НОВУЮ эру ПО ЦЕНЕ и ВРЕМЕНИ ЭТОГО ЖЕ филла (требование
+ *    брифа «openedAt от НОВОГО открытия»), `peakAbsQty` НОВОЙ эры — размер НОВОЙ позиции
+ *    (`|remainingSigned|`), не исходный филл целиком (тот включал закрытую часть).
  */
 function foldFill(state: FoldState, entry: ExecutionLedgerFillEntry): FoldState {
   const fillSigned = signedQtyOf(entry);
 
   if (state.qtySigned === 0) {
-    return { qtySigned: fillSigned, avgPrice: entry.price, openedAtUs: entry.ts };
+    if (isNegligibleQty(fillSigned, Math.abs(fillSigned))) {
+      return FLAT_STATE;
+    }
+    return { qtySigned: fillSigned, avgPrice: entry.price, openedAtUs: entry.ts, peakAbsQty: Math.abs(fillSigned) };
   }
 
   if (sameSign(state.qtySigned, fillSigned)) {
@@ -251,23 +313,33 @@ function foldFill(state: FoldState, entry: ExecutionLedgerFillEntry): FoldState 
     const addedAbs = Math.abs(fillSigned);
     const totalAbs = priorAbs + addedAbs;
     const avgPrice = (state.avgPrice * priorAbs + entry.price * addedAbs) / totalAbs;
-    return { qtySigned: state.qtySigned + fillSigned, avgPrice, openedAtUs: state.openedAtUs };
+    return {
+      qtySigned: state.qtySigned + fillSigned,
+      avgPrice,
+      openedAtUs: state.openedAtUs,
+      peakAbsQty: Math.max(state.peakAbsQty, totalAbs),
+    };
   }
 
   // Противоположный знак — остаток может уменьшиться (частичный выход), обнулиться (полный выход,
-  // с float-шумом вместо точного нуля на дробных количествах — C-1) либо переменить знак (флип).
+  // с float-шумом вместо точного нуля на накопленной арифметике — C-1) либо переменить знак (флип).
   const remainingSigned = state.qtySigned + fillSigned;
-  if (isNearZero(remainingSigned)) {
-    // Полный выход. `qtySigned: 0` — РОВНО ноль, не остаточный шум: следующий fill (если будет)
-    // откроет новую эру с чистого места веткой `state.qtySigned === 0` выше.
-    return { qtySigned: 0, avgPrice: state.avgPrice, openedAtUs: state.openedAtUs };
+  if (isNegligibleQty(remainingSigned, state.peakAbsQty)) {
+    // Полный выход. Весь FoldState — flat, включая peakAbsQty: следующая эра меряет себя СВОИМ
+    // масштабом, не масштабом эры, которой больше нет.
+    return FLAT_STATE;
   }
   if (sameSign(remainingSigned, state.qtySigned)) {
-    // Частичный выход БЕЗ флипа — эра та же: avgPrice/openedAt держатся.
-    return { qtySigned: remainingSigned, avgPrice: state.avgPrice, openedAtUs: state.openedAtUs };
+    // Частичный выход БЕЗ флипа — эра та же: avgPrice/openedAt/peakAbsQty держатся.
+    return { qtySigned: remainingSigned, avgPrice: state.avgPrice, openedAtUs: state.openedAtUs, peakAbsQty: state.peakAbsQty };
   }
-  // Флип: новая эра с этого самого филла.
-  return { qtySigned: remainingSigned, avgPrice: entry.price, openedAtUs: entry.ts };
+  // Флип: новая эра с этого самого филла — пик новой эры измеряется НОВЫМ остатком, не филлом целиком.
+  return {
+    qtySigned: remainingSigned,
+    avgPrice: entry.price,
+    openedAtUs: entry.ts,
+    peakAbsQty: Math.abs(remainingSigned),
+  };
 }
 
 /**
@@ -330,17 +402,24 @@ export function derivePositionView(ledger: ExecutionLedger): PositionView | unde
     lastTs = entry.ts;
     state = foldEntry(state, entry);
   }
-  if (state.qtySigned === 0) return undefined;
+  // ОДНА функция сравнения с нулём здесь и внутри foldFill — не точный `=== 0` рядом с эпсилоном
+  // (ревью раунда 2, C-1, второе следствие: «flat» и «есть позиция» были двумя разными предикатами
+  // в одном и том же файле). Поведенчески эквивалентно `=== 0` (foldFill уже снимает шум до РОВНО
+  // нуля через `FLAT_STATE`), но называет ОДИН канонический критерий вместо двух молчаливо
+  // согласованных.
+  if (isNegligibleQty(state.qtySigned, state.peakAbsQty)) return undefined;
   // Инвариант свёртки: qtySigned !== 0 ⇒ openedAtUs всегда установлен (любая ветка foldFill,
   // покидающая flat, устанавливает его) — приведение типа здесь не ослабляет проверку, а называет
   // то, что свёртка уже гарантирует структурно.
   //
   // `as PositionView` — ЕДИНСТВЕННОЕ место в пакете, которому разрешено произвести `PositionView`
-  // (см. doc бранд-символа `POSITION_VIEW_BRAND`, `event-driven.ts`): плоский объект здесь СТРУКТУРНО
-  // — это ровно форма `PositionView` без бранд-поля, TS разрешает сужающий `as` в эту сторону
-  // (`PositionView` assignable ВНИЗ к безбрандовой форме, обратное — нет), а получить `unique symbol`
-  // `POSITION_VIEW_BRAND` для литеральной сборки объекта неоткуда — он не экспортирован и не имеет
-  // рантайм-значения (`declare const`).
+  // «С НУЛЯ» (см. doc бранд-символа `POSITION_VIEW_BRAND`, `event-driven.ts`, ГДЕ ЖЕ — после ревью
+  // раунда 2, C-2 — записана ОДНОСТОРОННОСТЬ этой гарантии: создание с нуля закрыто, подделка
+  // spread'ом из уже полученного результата ЭТОЙ ЖЕ функции — нет и не может быть, это другой класс
+  // угрозы). Плоский объект здесь СТРУКТУРНО — это ровно форма `PositionView` без бранд-поля, TS
+  // разрешает сужающий `as` в эту сторону (`PositionView` assignable ВНИЗ к безбрандовой форме,
+  // обратное — нет), а получить `unique symbol` `POSITION_VIEW_BRAND` для литеральной сборки
+  // объекта неоткуда — он не экспортирован и не имеет рантайм-значения (`declare const`).
   return {
     side: state.qtySigned > 0 ? 'long' : 'short',
     qty: Math.abs(state.qtySigned),

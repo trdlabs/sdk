@@ -270,13 +270,22 @@ test('findDuplicateSubscriptionIds: пусто без дублей, дубль �
   assert.deepEqual(findDuplicateSubscriptionIds(withDup), ['sub-1']);
 });
 
-// --- state-слот: ActorInit.state / StrategyActor.snapshotState (ревью раунда 1, I-3) ---
+// --- state-слот: ActorInit<S>.state / StrategyActor<S>.snapshotState (ревью раунда 1, I-3;
+// раунд 2 — три Important на этой же поверхности: defineActor не мог произвести snapshotState
+// вовсе (пункт 1), снятие/восстановление не были связаны типом (пункт 2, дженерик S), двойная
+// опциональность делает потерю ненаблюдаемой (пункт 3, задокументировано как остаточный риск,
+// не проверяется здесь тестом — см. doc у ActorInit) ---
 
 test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять/вернуть при чекпойнте»', () => {
-  const priorState: ActorStateValue = { counter: 3, tags: ['a', 'b'] };
+  interface CounterState {
+    readonly [key: string]: ActorStateValue;
+    readonly counter: number;
+  }
+
+  const priorState: CounterState = { counter: 3 };
   assert.ok(isPlainActorState(priorState), 'фикстура сама обязана быть валидным state-слотом');
 
-  const init: ActorInit = {
+  const init: ActorInit<CounterState> = {
     params: {},
     seed: 1,
     symbol: 'BTCUSDT',
@@ -284,12 +293,12 @@ test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять
     state: priorState,
   };
 
-  let capturedInit: ActorInit | undefined;
-  const module: EventDrivenModule = {
+  let capturedInit: ActorInit<CounterState> | undefined;
+  const module: EventDrivenModule<CounterState> = {
     createActor: (i) => {
       capturedInit = i;
-      let counter = (i.state as { readonly counter: number } | undefined)?.counter ?? 0;
-      const actor: StrategyActor = {
+      let counter = i.state?.counter ?? 0;
+      const actor: StrategyActor<CounterState> = {
         onEvent: () => {
           counter += 1;
           return [];
@@ -308,13 +317,65 @@ test('I-3: StrategyActor.snapshotState/ActorInit.state — пара «снять
   assert.deepEqual(snapshot, { counter: 4 });
 
   // Первый запуск актора — состояния снимать ещё не с чего, `state` опционален.
-  const firstRunInit: ActorInit = { params: {}, seed: 2, symbol: 'ETHUSDT', subscriptions: [] };
+  const firstRunInit: ActorInit<CounterState> = { params: {}, seed: 2, symbol: 'ETHUSDT', subscriptions: [] };
   assert.equal(firstRunInit.state, undefined);
 });
 
-test('snapshotState опционален — актор без собственного состояния его не объявляет', () => {
-  const actor = defineActor({});
-  assert.equal(actor.snapshotState, undefined);
+// I-3 ревью раунда 2, пункт 2 (Important): снятие и восстановление были ДВУМЯ независимыми полями
+// одного и того же широкого ActorStateValue — «снял одно, вернул другое» компилировалось. Дженерик
+// `S` теперь связывает `StrategyActor<S>.snapshotState(): S` и `ActorInit<S>.state?: S` ОДНИМ
+// параметром типа — несовпадение форм красит СБОРКУ, не рантайм.
+test('I-3 раунд 2, п.2: параметризованные StrategyActor<S>/ActorInit<S> связывают снятие и восстановление типом', () => {
+  interface SmaState {
+    readonly [key: string]: ActorStateValue;
+    readonly ticks: number;
+    readonly sma: number;
+  }
+
+  // Совместимая пара — типизируется и работает.
+  const compatibleModule: EventDrivenModule<SmaState> = {
+    createActor: (init) => ({
+      onEvent: () => [],
+      snapshotState: () => ({ ticks: (init.state?.ticks ?? 0) + 1, sma: init.state?.sma ?? 0 }),
+    }),
+  };
+  const compatibleInit: ActorInit<SmaState> = {
+    params: {},
+    seed: 1,
+    symbol: 'BTCUSDT',
+    subscriptions: [],
+    state: { ticks: 1, sma: 100 },
+  };
+  const compatibleActor = compatibleModule.createActor(compatibleInit);
+  assert.deepEqual(compatibleActor.snapshotState?.(), { ticks: 2, sma: 100 });
+
+  // Несовместимая пара — актор снимает SmaState, но объявлен как StrategyActor<string> (голая
+  // строка вместо структурированного состояния): раньше (общий ActorStateValue с обеих сторон)
+  // компилировалось молча; с дженериком — ошибка компиляции РОВНО там, где формы разошлись.
+  const mismatched: StrategyActor<string> = {
+    onEvent: () => [],
+    // @ts-expect-error — snapshotState возвращает SmaState, не string: несовпадение типового
+    // параметра между декларацией StrategyActor<string> и телом, которое снимает объект.
+    snapshotState: (): SmaState => ({ ticks: 1, sma: 100 }),
+  };
+  void mismatched;
+});
+
+// I-3 ревью раунда 2, пункт 1 (Important): собственный сахар SDK (`defineActor`) не мог произвести
+// `snapshotState` вовсе — `Reflect.ownKeys(actor)` был `['onEvent']` ПРИ ЛЮБЫХ переданных
+// хендлерах. Тест ниже — РОВНО проверка ревью, обеими сторонами (с хендлером и без).
+test('I-3 раунд 2, п.1: defineActor производит snapshotState, когда handlers.snapshotState передан', () => {
+  const stateless = defineActor({});
+  assert.deepEqual(Reflect.ownKeys(stateless), ['onEvent'], 'без хендлера — поля snapshotState нет вовсе');
+  assert.equal(stateless.snapshotState, undefined);
+
+  const stateful = defineActor({ snapshotState: () => ({ n: 1 }) });
+  assert.deepEqual(
+    Reflect.ownKeys(stateful),
+    ['onEvent', 'snapshotState'],
+    'с хендлером — поле присутствует симметрично объявленному',
+  );
+  assert.deepEqual(stateful.snapshotState?.(), { n: 1 });
 });
 
 // --- OpenOrderView: дискриминированный union по type (ревью раунда 1, I-7); status (I-2) ---
@@ -392,6 +453,39 @@ test('I-2: status различает submitted/accepted — ортогональ
   // старая форма без status давала побайтово идентичные объекты для этих двух стадий).
   assert.notDeepEqual(submitted, accepted);
   assert.equal(submitted.filledQty, accepted.filledQty);
+});
+
+// Minor, ревью раунда 2: довод «управлять живой заявкой», которым в раунде 1 вернули createdTs,
+// применим к time-in-force ровно так же — актор не может решить, ждать/отменять заявку, не зная
+// её условия исполнения. `tif` опционален (симметрично `ActorPlaceCommand.tif`).
+test('Minor: OpenOrderView несёт опциональный tif — та же единица, что ActorPlaceCommand.tif', () => {
+  const withTif: OpenLimitOrderView = {
+    clientOrderId: 'o-1',
+    side: 'buy',
+    type: 'limit',
+    status: 'accepted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    price: 50_000,
+    tif: 'ioc',
+    createdTs: timestampUs(1),
+  };
+  assert.equal(withTif.tif, 'ioc');
+
+  // Опционален: литерал без tif остаётся валидным (существующие вызывающие не ломаются).
+  const withoutTif: OpenLimitOrderView = {
+    clientOrderId: 'o-2',
+    side: 'buy',
+    type: 'limit',
+    status: 'accepted',
+    qtyUsd: 100,
+    qty: 0.002,
+    filledQty: 0,
+    price: 50_000,
+    createdTs: timestampUs(1),
+  };
+  assert.equal(withoutTif.tif, undefined);
 });
 
 test('defineActor: специфичный хендлер получает событие своего вида', () => {

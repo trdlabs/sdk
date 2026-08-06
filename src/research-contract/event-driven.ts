@@ -882,19 +882,43 @@ function hasOnlyPlainArrayKeys(arr: readonly unknown[]): boolean {
 }
 
 /**
- * Рекурсивный обход с отслеживанием ТЕКУЩЕГО ПУТИ предков (не всех когда-либо посещённых узлов):
- * `ancestors` пополняется ПЕРЕД рекурсией в потомков и очищается ПОСЛЕ (backtracking) — так
- * отличается настоящий ЦИКЛ (узел ссылается сам на себя через цепочку потомков) от легитимного
- * ДИАМАНТА (два разных поля указывают на ОДИН И ТОТ ЖЕ вложенный объект, но не по кругу: JSON это
- * прекрасно сериализует, просто теряя разделяемую идентичность, что для plain-data не является
- * пороком). Глобальный «посещённый» `Set` без backtracking спутал бы диамант с циклом и отклонял
- * бы законные значения.
+ * Практический потолок глубины вложенности (ревью раунда 2, новый дефект: недоверенный ГЛУБОКИЙ
+ * вход валил функцию, документированную КАК ГЕЙТ недоверенного JSON, необработанным
+ * `RangeError: Maximum call stack size exceeded` на глубине ~5000 — сигнатура обещает `value is
+ * ActorStateValue`, а не крах, и `RangeError` того же конструктора, что намеренно бросает
+ * `derivePositionView` (`actor-state.ts`), неотличим вызывающим от НЕЙ). `500` — на порядок больше
+ * любой реалистичной глубины авторского состояния (счётчики/скользящие окна/индикаторы — считанные
+ * уровни вложенности, не тысячи) и безопасно ниже предела стека V8 для этой функции.
  */
-function isPlainDataValue(value: unknown, ancestors: ReadonlySet<object>): boolean {
+const MAX_ACTOR_STATE_DEPTH = 500;
+
+/**
+ * Рекурсивный обход с отслеживанием ТЕКУЩЕГО ПУТИ предков (не всех когда-либо посещённых узлов):
+ * `ancestors` — ОДИН изменяемый `Set`, пополняемый ПЕРЕД рекурсией в потомков и очищаемый ПОСЛЕ
+ * (`finally`, backtracking в буквальном смысле — O(1) на узел) — так отличается настоящий ЦИКЛ
+ * (узел ссылается сам на себя через цепочку потомков) от легитимного ДИАМАНТА (два разных поля
+ * указывают на ОДИН И ТОТ ЖЕ вложенный объект, но не по кругу: JSON это прекрасно сериализует,
+ * просто теряя разделяемую идентичность, что для plain-data не является пороком).
+ *
+ * ИСПРАВЛЕНО (ревью раунда 2, новый дефект): предыдущая версия КОПИРОВАЛА `ancestors` (`new
+ * Set(ancestors)`) НА КАЖДОМ узле — доc уже тогда называла это «backtracking», но копия целого
+ * множества размера O(глубина) на каждом из O(глубина) узлов линейной цепочки даёт O(глубина²), не
+ * O(глубина): прогон — глубина 1000 стоила 45.4 мс. Здесь — РОВНО то, что описывает доc: одно
+ * множество, `add` перед рекурсией, `delete` в `finally` после (сохраняет корректность на
+ * диамантах — тот же узел, встреченный ПОВТОРНО НЕ по кругу, к моменту повторной встречи уже
+ * удалён из `ancestors`, потому что первая ветвь успела вернуться).
+ */
+function isPlainDataValue(value: unknown, ancestors: Set<object>, depth: number): boolean {
+  if (depth > MAX_ACTOR_STATE_DEPTH) return false; // fail-closed, не падение стека — см. doc выше.
   if (value === null) return true;
   const t = typeof value;
   if (t === 'string' || t === 'boolean') return true;
-  if (t === 'number') return Number.isFinite(value as number);
+  // `-0` отклонён явно (Minor, ревью раунда 2): `JSON.stringify(-0) === '0'`, `JSON.parse('0') ===
+  // 0` (положительный) — `-0` НЕ переживает границу JSON байт-в-байт, хотя `Number.isFinite(-0)`
+  // истинно. Та же дисциплина, что `deepValueEquals` в `observation-status.ts` уже применяет к
+  // сравнению (`0` и `-0` — РАЗНЫЕ значения через `Object.is`), только здесь — не сравнение двух
+  // значений, а гарантия «переживёт JSON» одного значения.
+  if (t === 'number') return Number.isFinite(value as number) && !Object.is(value, -0);
   // function/symbol/bigint/undefined — НЕ plain-data. `undefined` внутри структуры (не как
   // отсутствующий ключ, а как явное значение) тоже отклонён: `JSON.stringify` роняет такие ключи
   // молча, то есть значение до/после границы JSON — уже не одно и то же значение.
@@ -902,36 +926,42 @@ function isPlainDataValue(value: unknown, ancestors: ReadonlySet<object>): boole
 
   const obj = value as object;
   if (ancestors.has(obj)) return false; // настоящий цикл — см. doc выше.
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(obj);
+  ancestors.add(obj);
+  try {
+    if (Array.isArray(obj)) {
+      if (!hasOnlyPlainArrayKeys(obj)) return false;
+      return obj.every((item) => isPlainDataValue(item, ancestors, depth + 1));
+    }
 
-  if (Array.isArray(obj)) {
-    if (!hasOnlyPlainArrayKeys(obj)) return false;
-    return obj.every((item) => isPlainDataValue(item, nextAncestors));
+    // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
+    // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
+    // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов (который
+    // расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к двум
+    // разрешённым формам прототипа.
+    const proto = Object.getPrototypeOf(obj);
+    if (proto !== Object.prototype && proto !== null) return false;
+    if (!hasOnlyPlainOwnKeys(obj)) return false;
+
+    return Object.values(obj as Record<string, unknown>).every((v) => isPlainDataValue(v, ancestors, depth + 1));
+  } finally {
+    // ОБЯЗАН выполниться на ВСЕХ путях выхода (включая ранние `return false` выше в блоке) — иначе
+    // соседняя ветвь (диамант, не потомок) видит `obj` как предка и ложно отклоняет легитимную
+    // разделяемую ссылку.
+    ancestors.delete(obj);
   }
-
-  // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
-  // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
-  // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов (который
-  // расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к двум
-  // разрешённым формам прототипа.
-  const proto = Object.getPrototypeOf(obj);
-  if (proto !== Object.prototype && proto !== null) return false;
-  if (!hasOnlyPlainOwnKeys(obj)) return false;
-
-  return Object.values(obj as Record<string, unknown>).every((v) => isPlainDataValue(v, nextAncestors));
 }
 
 /**
  * Рантайм-проверка формы авторского state-слота (требование 1). Отвергает: функции (прямые,
  * замыкания, под символьным или неперечислимым ключом), accessor-свойства, циклические ссылки,
- * `symbol`/`bigint`/`undefined`-в-структуре, `NaN`/`Infinity`, экзотические объекты
- * (`Date`/`Map`/`Set`/класс-инстанс), sparse-массивы, добавленные нечисловые свойства массива.
- * Принимает вложенную структуру из `null`/`boolean`/`string`/конечных `number`/плотных
- * массивов/plain-объектов любой глубины (включая разделяемые, не циклические ссылки — диамант).
+ * `symbol`/`bigint`/`undefined`-в-структуре, `NaN`/`Infinity`/`-0`, экзотические объекты
+ * (`Date`/`Map`/`Set`/класс-инстанс), sparse-массивы, добавленные нечисловые свойства массива,
+ * вложенность глубже `MAX_ACTOR_STATE_DEPTH` (fail-closed `false`, не исключение). Принимает
+ * вложенную структуру из `null`/`boolean`/`string`/конечных `number`/плотных массивов/plain-
+ * объектов до предельной глубины (включая разделяемые, не циклические ссылки — диамант).
  */
 export function isPlainActorState(value: unknown): value is ActorStateValue {
-  return isPlainDataValue(value, new Set());
+  return isPlainDataValue(value, new Set(), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -977,6 +1007,10 @@ interface OpenOrderViewBase {
   /** Исполненная часть, ТА ЖЕ единица что `qty` выше. `0 < filledQty < qty` ⇔ частичное исполнение. */
   readonly filledQty: number;
   readonly reduceOnly?: boolean;
+  /** Как заявка была подана — см. `ActorPlaceCommand.tif` (ревью раунда 2, Minor: `createdTs`
+   *  восстановлен доводом «управлять живой заявкой»; тот же довод относится к `tif` ровно так же
+   *  — актор не может решить, стоит ли отменять/ждать заявку, не зная её условия исполнения). */
+  readonly tif?: TimeInForce;
   /** Момент, когда хост впервые узнал об этой заявке (ревью раунда 1, M-2: без времени управление
    *  по возрасту заявки невозможно — снос в исходном черновике был недосмотром, не решением). */
   readonly createdTs: TimestampUs;
@@ -1019,8 +1053,32 @@ export type OpenOrderView = OpenMarketOrderView | OpenLimitOrderView | OpenStopM
 // отсутствующем свойстве. Заведён ПОСЛЕ ревью раунда 1 (C-2): прогон без единого `as` собрал
 // `ctx.position()`, разошедшийся с `ledger`/`ctx.orders.open()` — «главная цель задачи не
 // достигнута» до этой правки, ничто в типах не обязывало `position()` быть результатом
-// `derivePositionView`. `derivePositionView` — ЕДИНСТВЕННОЕ место в пакете, которому разрешено
-// произвести `PositionView` (через `as`, на плоском объекте той же формы — см. doc там).
+// `derivePositionView`.
+//
+// ГАРАНТИЯ ОДНОСТОРОННЯЯ — записано явно после ревью раунда 2 (C-2, ВОСПРОИЗВЕДЕНО ПОВТОРНО
+// против собранного пакета: прежняя формулировка «произвести его может ТОЛЬКО derivePositionView»
+// была заявкой сильнее, чем гарантирует механизм). Модель угрозы, которую бренд закрывает, — ХОСТ,
+// ЗАБЫВШИЙ вывести вид из журнала: собрать `PositionView` из собственной бухгалтерии «с нуля»
+// (объектный литерал, `satisfies`, structural widening, `Object.assign({}, flat)`) НЕВОЗМОЖНО —
+// каждый путь требует значения бранд-поля, а взять его неоткуда (`POSITION_VIEW_BRAND` не
+// экспортирован и не существует в рантайме). Это закрыто и подтверждено прогоном (все четыре пути
+// не компилируются).
+//
+// Модель угрозы, которую бренд НЕ закрывает и закрыть НЕ может выбранным механизмом (intersection-
+// бренд), — ПРЕДНАМЕРЕННАЯ подделка ИЗ УЖЕ ПОЛУЧЕННОГО настоящего экземпляра: `derivePositionView`
+// — публичный экспорт, поэтому `{ ...derivePositionView(ledger)!, qty: 1_000_000 }` типизируется
+// как `PositionView` без единого `as` — spread копирует ВСЕ поля исходного объекта, включая
+// бранд-поле, и TS не различает «бранд-поле присутствует, потому что объект настоящий» от «бранд-
+// поле присутствует, потому что его скопировали». Подмена этим путём требует уже ИМЕТЬ настоящий
+// экземпляр — то есть деривация уже произошла; бренд ловит забывчивость («не вызвал
+// derivePositionView вовсе»), а не умысел («вызвал, а потом подделал возвращённое значение»).
+// Остаточный риск реален и называется явно, а не умалчивается: любой TS nominal-бренд на основе
+// intersection уязвим ровно так же — закрыть его можно только рантайм-непрозрачным носителем
+// (например, `WeakSet` с проверкой на чтении), что для read-only снимка данных, пересекающего
+// JSON-подобную границу движка (S2), было бы избыточным усложнением ради угрозы вне модели («хост
+// добросовестно реализует ctx, но злонамеренно портит уже полученные значения» — не тот класс
+// дефекта, которым была подтверждена находка C-1 раунда 1; там хост НЕ ВЫВОДИЛ вид из журнала
+// вовсе, что бренд и ловит).
 declare const POSITION_VIEW_BRAND: unique symbol;
 
 /**
@@ -1094,17 +1152,30 @@ export interface ActorContext {
  * Пустой массив — валидный ответ (событие проигнорировано).
  *
  * `snapshotState` (ревью раунда 1, I-3) — ВТОРАЯ, необязательная точка входа, парная
- * `ActorInit.state` ниже: хост вызывает её МЕЖДУ вызовами `onEvent` (после обработки события,
+ * `ActorInit<S>.state` ниже: хост вызывает её МЕЖДУ вызовами `onEvent` (после обработки события,
  * перед возможным чекпойнтом изолята) и обязан персистить ПОСЛЕДНЕЕ снятое значение — то самое,
- * что вернётся актору через `ActorInit.state` при следующем восстановлении. Опциональность
- * симметрична: актор без собственного состояния между вызовами её не объявляет. Форма значения —
- * `ActorStateValue` (выше); ЭТА функция сама рантайм-проверку не делает — `isPlainActorState`
- * (выше) обязанность ХОСТА на границе персиста, симметрично тому, как `derivePositionView`/
- * `isExecutionLedgerEntry` (`actor-state.ts`) проверяют СВОЮ границу.
+ * что вернётся актору через `ActorInit<S>.state` при следующем восстановлении. Опциональность
+ * симметрична: актор без собственного состояния между вызовами её не объявляет. ЭТА функция сама
+ * рантайм-проверку не делает — `isPlainActorState` (выше) обязанность ХОСТА на границе персиста,
+ * симметрично тому, как `derivePositionView`/`isExecutionLedgerEntry` (`actor-state.ts`) проверяют
+ * СВОЮ границу.
+ *
+ * Дженерик `S` (ревью раунда 2, I-3, пункт 2) — снятое и восстановленное состояние были ДВУМЯ
+ * НЕЗАВИСИМЫМИ полями одного и того же широкого `ActorStateValue`: «снял `{ticks, sma}`, вернули
+ * голой строкой» компилировалось и исполнялось, каждый автор был вынужден писать `init.state as
+ * MyState` — приведение РОВНО на той JSON-границе, которой пакет не доверяет больше нигде (для
+ * ledger'а есть `isExecutionLedgerEntry`, для авторского состояния приведения не было ничем
+ * прикрыто). `S extends ActorStateValue = ActorStateValue` связывает `snapshotState(): S` здесь и
+ * `ActorInit<S>.state?: S` в одном типовом параметре — автор, параметризовавший `StrategyActor<
+ * MyState>`, получает несовпадение форм КАК ОШИБКУ КОМПИЛЯЦИИ, а не риск времени исполнения. Дефолт
+ * `ActorStateValue` держит НЕпараметризованное использование (как раньше) валидным без изменений.
+ *
+ * Дважды опциональность (`snapshotState?`/`state?`) ОСТАЁТСЯ и делает НАБЛЮДАЕМОСТЬ потери
+ * состояния ГРАНИЦЕЙ ЭТОГО СЛОЯ, не решённой задачей — см. развёрнутый doc у `ActorInit.state`.
  */
-export interface StrategyActor {
+export interface StrategyActor<S extends ActorStateValue = ActorStateValue> {
   onEvent(event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[];
-  snapshotState?(): ActorStateValue;
+  snapshotState?(): S;
 }
 
 /**
@@ -1166,21 +1237,39 @@ export function findDuplicateSubscriptionIds(
  * настоящий, и все три места поправлены на ссылку сюда.
  *
  * `state` (ревью раунда 1, I-3) — восстановленное авторское состояние, парная точка
- * `StrategyActor.snapshotState` выше: `undefined` — ПЕРВЫЙ запуск актора (снимать ещё нечего);
- * иначе — ПОСЛЕДНЕЕ значение, снятое `snapshotState` перед чекпойнтом, которое хост обязан вернуть
- * байт-в-байт (после прохода через `isPlainActorState` на своей стороне).
+ * `StrategyActor<S>.snapshotState` выше (ОДИН и тот же `S`, ревью раунда 2, I-3 пункт 2 — см. doc
+ * там): `undefined` — ПЕРВЫЙ запуск актора (снимать ещё нечего); иначе — ПОСЛЕДНЕЕ значение,
+ * снятое `snapshotState` перед чекпойнтом, которое хост обязан вернуть байт-в-байт (после прохода
+ * через `isPlainActorState` на своей стороне).
+ *
+ * **Остаточный риск (ревью раунда 2, I-3 пункт 3) — назван явно, не решён на этом слое.** Все
+ * четыре комбинации присутствия типизируются: `snapshotState` объявлен + `state` пришёл (штатный
+ * цикл), `snapshotState` объявлен + `state` НЕ пришёл (тихий рестарт с нуля — хост забыл
+ * персистить/передать), `snapshotState` НЕ объявлен + `state` пришёл (хост передал состояние
+ * актору, которому неоткуда его принять — тихая недостижимость), `snapshotState` НЕ объявлен +
+ * `state` не пришёл (штатный stateless-цикл). ДВЕ из четырёх — потеря данных, и НИ ТИП, НИ
+ * РАНТАЙМ этого слоя её не ловят — в отличие от `derivePositionView` (`actor-state.ts`), который
+ * БРОСАЕТ на недоверенном ledger'е. Причина асимметрии структурная, не недосмотр: `derivePositionView`
+ * — ЧИСТАЯ функция над данными, которые ей передали В ЭТОМ ЖЕ вызове, и может проверить их на
+ * месте; «хост забыл вызвать `snapshotState` между вызовами `onEvent`» и «хост забыл передать
+ * `state` при следующем `createActor`» — факты о ПОВЕДЕНИИ ДВИЖКА ВО ВРЕМЕНИ, а не о форме
+ * значения в руках у функции — `sdk` (S1, только формы) в принципе не может проверить то, что
+ * ещё не произошло и происходит не внутри вызова, который он контролирует. Закрыть это может
+ * ТОЛЬКО S2 (`@trdlabs/engine`): например, детектировать «actor.snapshotState существует, но
+ * между двумя чекпойнтами не вызывался» рантайм-инвариантом движка. Здесь — явное имя риска, не
+ * умолчание (та же дисциплина, что применена к C-2 этого же раунда).
  */
-export interface ActorInit {
+export interface ActorInit<S extends ActorStateValue = ActorStateValue> {
   readonly params: Readonly<Record<string, unknown>>;
   readonly seed: number;
   readonly symbol: string;
   readonly subscriptions: readonly ActorSubscriptionDescriptor[];
-  readonly state?: ActorStateValue;
+  readonly state?: S;
 }
 
 /** Кодовый модуль стратегии формы `event_driven` (аналог `StrategyModule` для `single_position`). */
-export interface EventDrivenModule {
-  createActor(init: ActorInit): StrategyActor;
+export interface EventDrivenModule<S extends ActorStateValue = ActorStateValue> {
+  createActor(init: ActorInit<S>): StrategyActor<S>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1194,8 +1283,16 @@ export type ActorHandlerResult = readonly ActorCommand[] | ActorCommand | null |
  * Удобные хендлеры по видам событий. Все опциональны; `onEvent` — catch-all для видов без
  * своего хендлера (паттерн Nautilus `on_event`). Ни один не объявлен → актор ничего не делает,
  * что валидно (и полезно как заглушка).
+ *
+ * `snapshotState` (ревью раунда 2, I-3, пункт 1, Important): без этого поля `defineActor` не имел
+ * НИ ОДНОГО способа произвести `StrategyActor` с `snapshotState` — прогон ревью подтвердил
+ * `Reflect.ownKeys(actor) === ['onEvent']` ПРИ ЛЮБЫХ переданных хендлерах, то есть собственный
+ * рекомендуемый сахар SDK был единственным путём, на котором авторское состояние молча умирает на
+ * каждом чекпойнте, без ошибки компиляции и без сигнала в рантайме — ровно та форма отказа, против
+ * которой написан нормативный блок `actor-state.ts` про `tp1Done`-подобные флаги (механизм
+ * расширили в `StrategyActor`/`ActorInit`, бухгалтерию сахара вокруг него — нет).
  */
-export interface ActorHandlers {
+export interface ActorHandlers<S extends ActorStateValue = ActorStateValue> {
   onMarketCandleClosed?(event: MarketCandleClosedEvent, ctx: ActorContext): ActorHandlerResult;
   onMarketOpenInterestObserved?(
     event: MarketOpenInterestObservedEvent,
@@ -1223,6 +1320,9 @@ export interface ActorHandlers {
   onTimer?(event: ActorTimerEvent, ctx: ActorContext): ActorHandlerResult;
   /** Catch-all: получает события, для которых нет специфичного хендлера. */
   onEvent?(event: ActorInputEvent, ctx: ActorContext): ActorHandlerResult;
+  /** Снять авторское состояние — см. doc `StrategyActor.snapshotState`. Опционально: стейтлес-актор
+   *  его не объявляет, и `defineActor` тогда НЕ добавляет `snapshotState` в возвращаемый объект. */
+  snapshotState?(): S;
 }
 
 /** Нормализовать ответ хендлера к батчу (единственная точка, где `null`/одиночка расширяются). */
@@ -1239,71 +1339,82 @@ function toBatch(result: ActorHandlerResult): readonly ActorCommand[] {
  * Диспетч — явный switch по замкнутому union'у: ни итерации по объекту, ни динамического
  * построения имени метода. Порядок и результат зависят ТОЛЬКО от `event.kind` (требование
  * детерминизма движка E3, п. 5 определения).
+ *
+ * `snapshotState` присутствует на возвращённом акторе ⟺ `handlers.snapshotState` был передан
+ * (ревью раунда 2, I-3, пункт 1) — `Reflect.ownKeys` возвращаемого объекта либо `['onEvent']`,
+ * либо `['onEvent', 'snapshotState']`, СИММЕТРИЧНО тому, что автор фактически объявил, а не
+ * `['onEvent']` всегда: до этой правки `defineActor` не мог произвести `snapshotState` вовсе.
  */
-export function defineActor(handlers: ActorHandlers): StrategyActor {
-  return {
-    onEvent(event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[] {
-      switch (event.kind) {
-        case 'market.candle.closed':
-          if (handlers.onMarketCandleClosed) {
-            return toBatch(handlers.onMarketCandleClosed(event, ctx));
-          }
-          break;
-        case 'market.open_interest.observed':
-          if (handlers.onMarketOpenInterestObserved) {
-            return toBatch(handlers.onMarketOpenInterestObserved(event, ctx));
-          }
-          break;
-        case 'market.liquidations.bucket_closed':
-          if (handlers.onMarketLiquidationsBucketClosed) {
-            return toBatch(handlers.onMarketLiquidationsBucketClosed(event, ctx));
-          }
-          break;
-        case 'market.taker_volume.bucket_closed':
-          if (handlers.onMarketTakerVolumeBucketClosed) {
-            return toBatch(handlers.onMarketTakerVolumeBucketClosed(event, ctx));
-          }
-          break;
-        case 'market.funding.observed':
-          if (handlers.onMarketFundingObserved) {
-            return toBatch(handlers.onMarketFundingObserved(event, ctx));
-          }
-          break;
-        case 'market.subscription.status_changed':
-          if (handlers.onMarketSubscriptionStatusChanged) {
-            return toBatch(handlers.onMarketSubscriptionStatusChanged(event, ctx));
-          }
-          break;
-        case 'order.accepted':
-          if (handlers.onOrderAccepted) return toBatch(handlers.onOrderAccepted(event, ctx));
-          break;
-        case 'order.denied':
-          if (handlers.onOrderDenied) return toBatch(handlers.onOrderDenied(event, ctx));
-          break;
-        case 'order.rejected':
-          if (handlers.onOrderRejected) return toBatch(handlers.onOrderRejected(event, ctx));
-          break;
-        case 'order.canceled':
-          if (handlers.onOrderCanceled) return toBatch(handlers.onOrderCanceled(event, ctx));
-          break;
-        case 'order.expired':
-          if (handlers.onOrderExpired) return toBatch(handlers.onOrderExpired(event, ctx));
-          break;
-        case 'fill':
-          if (handlers.onFill) return toBatch(handlers.onFill(event, ctx));
-          break;
-        case 'timer':
-          if (handlers.onTimer) return toBatch(handlers.onTimer(event, ctx));
-          break;
-        default: {
-          // Замкнутый union: недостижимо, пока каталог и типы согласованы.
-          const exhaustive: never = event;
-          throw new Error(
-            `defineActor: неизвестный вид события "${String((exhaustive as { kind?: unknown }).kind)}"`,
-          );
+export function defineActor<S extends ActorStateValue = ActorStateValue>(
+  handlers: ActorHandlers<S>,
+): StrategyActor<S> {
+  const onEvent = (event: ActorInputEvent, ctx: ActorContext): readonly ActorCommand[] => {
+    switch (event.kind) {
+      case 'market.candle.closed':
+        if (handlers.onMarketCandleClosed) {
+          return toBatch(handlers.onMarketCandleClosed(event, ctx));
         }
+        break;
+      case 'market.open_interest.observed':
+        if (handlers.onMarketOpenInterestObserved) {
+          return toBatch(handlers.onMarketOpenInterestObserved(event, ctx));
+        }
+        break;
+      case 'market.liquidations.bucket_closed':
+        if (handlers.onMarketLiquidationsBucketClosed) {
+          return toBatch(handlers.onMarketLiquidationsBucketClosed(event, ctx));
+        }
+        break;
+      case 'market.taker_volume.bucket_closed':
+        if (handlers.onMarketTakerVolumeBucketClosed) {
+          return toBatch(handlers.onMarketTakerVolumeBucketClosed(event, ctx));
+        }
+        break;
+      case 'market.funding.observed':
+        if (handlers.onMarketFundingObserved) {
+          return toBatch(handlers.onMarketFundingObserved(event, ctx));
+        }
+        break;
+      case 'market.subscription.status_changed':
+        if (handlers.onMarketSubscriptionStatusChanged) {
+          return toBatch(handlers.onMarketSubscriptionStatusChanged(event, ctx));
+        }
+        break;
+      case 'order.accepted':
+        if (handlers.onOrderAccepted) return toBatch(handlers.onOrderAccepted(event, ctx));
+        break;
+      case 'order.denied':
+        if (handlers.onOrderDenied) return toBatch(handlers.onOrderDenied(event, ctx));
+        break;
+      case 'order.rejected':
+        if (handlers.onOrderRejected) return toBatch(handlers.onOrderRejected(event, ctx));
+        break;
+      case 'order.canceled':
+        if (handlers.onOrderCanceled) return toBatch(handlers.onOrderCanceled(event, ctx));
+        break;
+      case 'order.expired':
+        if (handlers.onOrderExpired) return toBatch(handlers.onOrderExpired(event, ctx));
+        break;
+      case 'fill':
+        if (handlers.onFill) return toBatch(handlers.onFill(event, ctx));
+        break;
+      case 'timer':
+        if (handlers.onTimer) return toBatch(handlers.onTimer(event, ctx));
+        break;
+      default: {
+        // Замкнутый union: недостижимо, пока каталог и типы согласованы.
+        const exhaustive: never = event;
+        throw new Error(
+          `defineActor: неизвестный вид события "${String((exhaustive as { kind?: unknown }).kind)}"`,
+        );
       }
-      return handlers.onEvent ? toBatch(handlers.onEvent(event, ctx)) : [];
-    },
+    }
+    return handlers.onEvent ? toBatch(handlers.onEvent(event, ctx)) : [];
   };
+
+  if (handlers.snapshotState) {
+    const snapshotState = handlers.snapshotState;
+    return { onEvent, snapshotState: () => snapshotState() };
+  }
+  return { onEvent };
 }
