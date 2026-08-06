@@ -30,7 +30,7 @@
 // а не про то, доверяет ли она форме данных, которые ей передали через недоверенную JSON-границу.
 
 import { isTimestampUs, type TimestampUs } from './time-us.js';
-import type { OrderSide, PositionView } from './event-driven.js';
+import { hasOnlyPlainOwnKeys, type OrderSide, type PositionView } from './event-driven.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ЗАПРЕТ: контракт не заводит поля вида `tp1Done`/`tp2Done`/`breakEvenArmed` (требование 5).
@@ -142,10 +142,7 @@ function isOrderSide(value: unknown): value is OrderSide {
  * Собственные ключи `value` — РОВНО множество `allowed`, не больше и не меньше (Minor, ревью
  * раунда 3): без этой проверки поле-полю проверка ниже ПРОПУСКАЕТ лишние ключи — прогон ревью,
  * `{...goodFill, rogue: () => 1}`, проходил как валидный `ExecutionLedgerFillEntry`, хотя
- * `isPlainActorState` (`event-driven.ts`) ту же самую функцию под лишним ключом отвергает. Два
- * гейта одной границы (чекпойнт изолята) обязаны быть одинаково строги, не по-разному. `Reflect.
- * ownKeys` (не `Object.keys`) ловит и символьный лишний ключ, которого белый список ниже тоже не
- * называет.
+ * `isPlainActorState` (`event-driven.ts`) ту же самую функцию под лишним ключом отвергает.
  */
 function hasExactOwnKeys(value: object, allowed: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
@@ -153,11 +150,32 @@ function hasExactOwnKeys(value: object, allowed: readonly string[]): boolean {
   return allowed.every((key) => keys.includes(key));
 }
 
+/**
+ * Прототип и «чистота» собственных ключей — ПЕРЕИСПОЛЬЗУЕТ `hasOnlyPlainOwnKeys` (`event-driven.
+ * ts`, экспортирована именно ради этого раунда 4) буквально, а не собственную копию (ревью раунда
+ * 4, Important): doc `hasExactOwnKeys` выше заявляла «два гейта одной границы обязаны быть
+ * одинаково строги», но раунд 3 закрыл только ЛИШНИЕ ключи — прогон ревью нашёл ТРИ пробела,
+ * которые `hasExactOwnKeys` (проверяет только МНОЖЕСТВО имён) структурно не может закрыть: класс-
+ * инстанс верной формы (прототип не проверялся вовсе), `qty` через `get`-accessor, неперечислимое
+ * поле — все три давали `true` здесь и `false` в `isPlainActorState`. Accessor — настоящий TOCTOU:
+ * этот гейт читает поле ОДИН раз при валидации, `foldFill` (`actor-state.ts`) — ВТОРОЙ при
+ * свёртке, и `get` между ними может вернуть другое значение (провалидирован `buy`, в
+ * `PositionView` попал `short` — ровно «тихое искажение PositionView», ради недопущения которого
+ * заведён I-5). Заявленный в модели угрозы источник (`JSON.parse` чекпойнта) accessor'ов и чужих
+ * прототипов не производит — это защита на будущее, если граница когда-нибудь станет шире, чем
+ * заявлено, а не текущая брешь именно там, где документирована модель угрозы.
+ */
+function isPlainRecordShape(value: object): boolean {
+  const proto = Object.getPrototypeOf(value);
+  return (proto === Object.prototype || proto === null) && hasOnlyPlainOwnKeys(value);
+}
+
 const FILL_ENTRY_KEYS = ['kind', 'ts', 'clientOrderId', 'side', 'price', 'qty', 'fee', 'last'] as const;
 const FUNDING_SETTLEMENT_ENTRY_KEYS = ['kind', 'ts', 'amount'] as const;
 
 function isExecutionLedgerFillEntry(value: unknown): value is ExecutionLedgerFillEntry {
   if (typeof value !== 'object' || value === null) return false;
+  if (!isPlainRecordShape(value)) return false;
   if (!hasExactOwnKeys(value, FILL_ENTRY_KEYS)) return false;
   const v = value as Record<string, unknown>;
   return (
@@ -177,6 +195,7 @@ function isExecutionLedgerFundingSettlementEntry(
   value: unknown,
 ): value is ExecutionLedgerFundingSettlementEntry {
   if (typeof value !== 'object' || value === null) return false;
+  if (!isPlainRecordShape(value)) return false;
   if (!hasExactOwnKeys(value, FUNDING_SETTLEMENT_ENTRY_KEYS)) return false;
   const v = value as Record<string, unknown>;
   return v.kind === 'funding_settlement' && isTimestampUs(v.ts) && isFiniteNumber(v.amount);

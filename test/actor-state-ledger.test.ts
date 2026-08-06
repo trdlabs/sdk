@@ -224,6 +224,77 @@ test('isPlainActorState: DAG с разделяемыми поддеревьям�
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// C-4 (Critical, ревью раунда 4) — РЕГРЕССИЯ раунда 3: memo (`confirmed`) обходил потолок глубины,
+// потому что хранил «доказано» без ГЛУБИНЫ, на которой это доказано. Воспроизведение — не
+// искусственное: append-only цепочка (авторский аудит-лог/история версий) плюс индекс-массив,
+// обычный функциональный паттерн. Починка — `confirmed: Map<object, height>`, проверка
+// `depth + height <= MAX_ACTOR_STATE_DEPTH` на каждом memo-попадании.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Append-only цепочка `ticks` звеньев ПЛЮС индекс-массив всех узлов в порядке создания — тот же
+ *  объект `head` (== `index[ticks-1]`) достижим и напрямую, и (дёшево, через уже подтверждённый
+ *  меньший узел) из массива. */
+function chainWithIndex(ticks: number): { readonly index: readonly unknown[]; readonly head: unknown } {
+  let head: unknown = null;
+  const index: unknown[] = [];
+  for (let i = 0; i < ticks; i += 1) {
+    head = { prev: head, value: i };
+    index.push(head);
+  }
+  return { index, head };
+}
+
+test('C-4: memo НЕ обходит потолок глубины — вердикт не зависит от порядка ключей', () => {
+  // Дословный сценарий ревью: {index, head} (мелкий узел подтверждается первым, глубокий head
+  // дёшево проходит через memo) раньше давал true на глубине 6001/12001; {head, index} (тот же
+  // объект, без прогретого memo) честно отклонял на той же структуре — вердикт зависел от порядка
+  // ключей, не от данных. После правки оба порядка обязаны СОВПАДАТЬ на каждом масштабе.
+  for (const ticks of [3000, 6000, 12000]) {
+    const stateIndexFirst = chainWithIndex(ticks);
+    const stateHeadFirst = { head: stateIndexFirst.head, index: stateIndexFirst.index };
+    const withIndexFirst = isPlainActorState(stateIndexFirst);
+    const withHeadFirst = isPlainActorState(stateHeadFirst);
+    assert.equal(withIndexFirst, false, `ticks=${ticks}, {index,head}: глубина ${ticks + 1} превышает потолок`);
+    assert.equal(withHeadFirst, false, `ticks=${ticks}, {head,index}: тот же вердикт независимо от порядка ключей`);
+    assert.equal(withIndexFirst, withHeadFirst, `ticks=${ticks}: вердикт не должен зависеть от порядка ключей`);
+  }
+});
+
+test('C-4: в пределах потолка глубины memo по-прежнему принимает — порог не пересолен в обратную сторону', () => {
+  // Негативный контроль: правка C-4 не должна сделать порог СТРОЖЕ, чем документированный потолок.
+  for (const ticks of [100, 400, 498]) {
+    const stateIndexFirst = chainWithIndex(ticks);
+    const stateHeadFirst = { head: stateIndexFirst.head, index: stateIndexFirst.index };
+    assert.equal(isPlainActorState(stateIndexFirst), true, `ticks=${ticks}, {index,head}`);
+    assert.equal(isPlainActorState(stateHeadFirst), true, `ticks=${ticks}, {head,index}`);
+  }
+});
+
+test('C-4: цикл ЧЕРЕЗ разделяемый (memo-подтверждённый) узел по-прежнему даёт false', () => {
+  // Регрессионный тест на риск, названный явно ревью раунда 4: новая форма мемоизации (height-
+  // aware) не должна была потерять то, что подтвердил дифф-фаззинг раунда 3 (20 000 графов против
+  // независимого оракула, 0 расхождений) — цикл, СОСЕДСТВУЮЩИЙ с легитимной разделяемой ссылкой,
+  // обязан ловиться, а сама разделяемая ссылка — не ложно отклоняться из-за соседства с циклом.
+  const shared = { x: 1 };
+
+  const cyclic: Record<string, unknown> = { a: 1 };
+  cyclic.self = cyclic;
+  const combinedWithCycle = { sharedRef: shared, alsoShared: { nested: shared }, bad: cyclic };
+  assert.equal(isPlainActorState(combinedWithCycle), false, 'цикл рядом с разделяемым узлом обязан ловиться');
+
+  const combinedNoCycle = { sharedRef: shared, alsoShared: { nested: shared }, more: [shared, shared] };
+  assert.equal(isPlainActorState(combinedNoCycle), true, 'та же разделяемая ссылка без цикла — легальна');
+
+  // Цикл, ОБНАРУЖЕННЫЙ через узел, который в ДРУГОЙ ветке уже подтверждён (memo) как валидный:
+  // сам факт присутствия в confirmed не должен «защищать» соседний цикл через тот же узел.
+  const hub = { value: shared }; // hub сам по себе валиден и попадёт в confirmed.
+  const loopy: Record<string, unknown> = { via: hub };
+  loopy.backToLoopy = loopy;
+  const mixed = { first: hub, second: { hubAgain: hub, loop: loopy } };
+  assert.equal(isPlainActorState(mixed), false, 'hub легален и мемоизируется, но loopy рядом всё равно цикличен');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Пункт 3 — PositionView без unrealizedPnl; C-2 — бранд-тип, только derivePositionView.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -580,6 +651,52 @@ test('Minor: isExecutionLedgerEntry отвергает лишний ключ —
   const goodFunding = { kind: 'funding_settlement', ts: 1, amount: -1.5 };
   assert.equal(isExecutionLedgerEntry(goodFunding), true, 'фикстура сама обязана быть валидной записью');
   assert.equal(isExecutionLedgerEntry({ ...goodFunding, rogue: 1 }), false, 'то же для funding_settlement');
+});
+
+// Important, ревью раунда 4: паритет с isPlainActorState был ЗАЯВЛЕН доc-комментарием
+// hasExactOwnKeys (раунд 3), но не достигнут — прогон ревью нашёл class-инстанс, get-accessor и
+// неперечислимое поле, которые проходили здесь и отклонялись isPlainActorState. Accessor даёт
+// настоящий TOCTOU (проверка читает поле один раз, derivePositionView/foldFill — второй): значение
+// может измениться между валидацией и использованием. Починка — isPlainRecordShape переиспользует
+// hasOnlyPlainOwnKeys (event-driven.ts) буквально, не копирует.
+test('Important: isExecutionLedgerEntry отвергает class-инстанс, get-accessor и неперечислимое поле — паритет с isPlainActorState', () => {
+  class Fill {
+    kind = 'fill' as const;
+    ts = 1;
+    clientOrderId = 'o';
+    side = 'buy' as const;
+    price = 100;
+    qty = 10;
+    fee = 0;
+    last = false;
+  }
+  assert.equal(isExecutionLedgerEntry(new Fill()), false, 'class-инстанс верной формы — не plain-объект');
+
+  const withAccessor: Record<string, unknown> = {
+    kind: 'fill',
+    ts: 1,
+    clientOrderId: 'o',
+    side: 'buy',
+    price: 100,
+    fee: 0,
+    last: false,
+  };
+  // TOCTOU буквально: get возвращает 10 при проверке, но ничто не мешает ему вернуть другое
+  // значение при следующем чтении (foldFill).
+  Object.defineProperty(withAccessor, 'qty', { get: () => 10, enumerable: true, configurable: true });
+  assert.equal(isExecutionLedgerEntry(withAccessor), false, 'qty через get-accessor — TOCTOU, отвергается');
+
+  const withNonEnumerable: Record<string, unknown> = {
+    kind: 'fill',
+    ts: 1,
+    clientOrderId: 'o',
+    side: 'buy',
+    price: 100,
+    fee: 0,
+    last: false,
+  };
+  Object.defineProperty(withNonEnumerable, 'qty', { value: 10, enumerable: false, configurable: true });
+  assert.equal(isExecutionLedgerEntry(withNonEnumerable), false, 'qty неперечислимо — та же строгость, что isPlainActorState');
 });
 
 test('I-5: derivePositionView бросает на недоверенной записи, а не молча портит PositionView', () => {
