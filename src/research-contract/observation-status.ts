@@ -160,21 +160,31 @@ function defaultValueEquals<T>(a: T, b: T): boolean {
  * проза брифа):
  *
  * - `revision` первого наблюдения ключа обязана быть `0` — иное трактуется как пропуск (см. ниже);
- * - `revision` монотонна: `next.revision < previous.revision` — отказ (регресс);
- * - тот же `revision`, то же `value` (по `valueEquals`), та же `finality` — идемпотентный дубль;
- * - тот же `revision`, то же `value`, но `finality` `provisional → final` — легитимная
- *   финализация ТОЙ ЖЕ ревизии (`provisional(n) → final(n)`), не дубль и не отказ;
- * - тот же `revision`, но ДРУГОЕ `value` — fail-closed corruption: два разных содержимых под одним
+ * - **идемпотентный дубль побеждает терминальность** (решение владельца 2026-08-06, правка после
+ *   ревью): тот же `revision` с тем же `value` (по `valueEquals`) законен НЕЗАВИСИМО от `finality`
+ *   обеих сторон — включая повтор `final(n)` побитово идентичным `final(n)`. Доставка «хотя бы один
+ *   раз» — обычная реальность транспорта; штатный повторный приезд той же финальной записи не имеет
+ *   права ронить прогон, иначе fail-closed срабатывает на безобидной сети, а не на дефекте данных, и
+ *   это ложноположительное срабатывание хуже отсутствия гейта — оно приучает его выключать. Эта
+ *   проверка идёт ДО проверки на `previous.finality === 'final'` ниже;
+ * - тот же `revision`, то же `value`, `finality` `provisional → final` — легитимная финализация
+ *   ТОЙ ЖЕ ревизии (`provisional(n) → final(n)`), единственный СМЫСЛОВОЙ переход при неизменном
+ *   содержимом; не дубль (объявляет окончательность) и не отказ;
+ * - тот же `revision`, но ДРУГОЕ `value` — fail-closed corruption ВСЕГДА, в том числе после `final`
+ *   (`final(n)` с одним содержимым → `final(n)` с другим — отказ): два разных содержимых под одним
  *   номером физически означают повреждённый поток, не переиграть детерминированно;
+ * - `previous.finality === 'final'` И `next.revision !== previous.revision` — отказ (терминальность
+ *   в чистом виде: см. doc `finality` у `ObservationStatus`). Это ровно то, для чего терминальность
+ *   `final` существует, — новая информация («другой revision») не может явиться после того, как
+ *   значение объявлено окончательным; конфликт СОДЕРЖИМОГО на ТОМ ЖЕ revision после `final` уже
+ *   пойман правилом выше, отдельного повторения здесь не требует;
+ * - `revision` монотонна ПРИ `previous.finality === 'provisional'`: `next.revision <
+ *   previous.revision` — отказ (регресс);
  * - `next.revision === previous.revision + 1` — новая ревизия, принята (`final` следующей ревизии
  *   допустим сразу, без обязательного промежуточного `provisional` на ТОМ ЖЕ номере — легален путь
  *   `provisional(n) → provisional(n+1) → final(n+1)`, но не единственно возможный);
  * - `next.revision > previous.revision + 1` — пропуск номера: отказ, ЕСЛИ вызывающий явно не
- *   передал `skipPolicy` (см. `DeclaredRevisionSkipPolicy`) — тихого прохождения нет;
- * - `previous.finality === 'final'` — ЛЮБОЙ `next` отклоняется: `final` терминален в v1 (см. doc
- *   `finality` у `ObservationStatus`), включая побитово идентичный повтор. Ревизии после `final`
- *   структурно не ожидаются вообще — вызов сюда после final сигнализирует апстрим-аномалию (баг
- *   резолвера либо испорченная доставка), которую нельзя тихо проглотить как «очередной дубль».
+ *   передал `skipPolicy` (см. `DeclaredRevisionSkipPolicy`) — тихого прохождения нет.
  */
 export function checkRevisionTransition<T>(
   previous: ObservedRevision<T> | undefined,
@@ -193,13 +203,9 @@ export function checkRevisionTransition<T>(
     return { outcome: 'accepted' };
   }
 
-  if (previous.finality === 'final') {
-    return rejected(
-      'observation_revision_finalized',
-      `final терминален в v1 — переход после final(${previous.revision}) запрещён`,
-    );
-  }
-
+  // Тот же revision — сначала содержимое, НЕЗАВИСИМО от finality (включая previous.finality
+  // === 'final'): идемпотентный дубль обязан пройти даже после final, а конфликт содержимого
+  // обязан отказать даже после final — терминальность здесь ни при чём в обоих случаях.
   if (next.revision === previous.revision) {
     if (!valueEquals(next.value, previous.value)) {
       return rejected(
@@ -207,12 +213,24 @@ export function checkRevisionTransition<T>(
         `ревизия ${next.revision} с другим содержимым при том же номере — fail-closed corruption`,
       );
     }
-    if (next.finality === previous.finality) {
-      return { outcome: 'duplicate' };
+    if (previous.finality === 'provisional' && next.finality === 'final') {
+      // Единственный СМЫСЛОВОЙ переход при неизменном содержимом: объявление окончательности.
+      return { outcome: 'accepted' };
     }
-    // previous.finality === 'provisional' (иначе поймано выше), next.finality === 'final':
-    // легитимная финализация той же ревизии, не дубль и не отказ.
-    return { outcome: 'accepted' };
+    // Любая другая комбинация finality при том же revision и том же содержимом (включая
+    // final → final побитово и final → provisional с тем же содержимым) не несёт новой
+    // информации — идемпотентный дубль, а не отказ и не смысловой переход.
+    return { outcome: 'duplicate' };
+  }
+
+  // С этой точки next.revision !== previous.revision — терминальность final срабатывает именно
+  // здесь и ровно за то, для чего существует: новая информация («другой revision») не может
+  // явиться после того, как значение объявлено окончательным.
+  if (previous.finality === 'final') {
+    return rejected(
+      'observation_revision_finalized',
+      `final терминален в v1 — после final(${previous.revision}) не может прийти revision ${next.revision}`,
+    );
   }
 
   if (next.revision < previous.revision) {

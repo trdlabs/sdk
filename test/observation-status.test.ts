@@ -156,16 +156,27 @@ test('provisional(n) → provisional(n+1) → final(n+1) — легальный 
   assert.equal(step3.outcome, 'accepted');
 });
 
-test('final → что угодно — отказ (терминальность), включая побитовый повтор', () => {
-  const finalRev = rev(2, 'final', 7);
+// Разделяющий случай (правка владельца после ревью, 2026-08-06): идемпотентный дубль побеждает
+// терминальность. Повторная доставка того же revision с тем же содержимым легальна НЕЗАВИСИМО от
+// finality — включая final → final побитово: доставка «хотя бы один раз» штатно приносит ту же
+// финальную запись дважды, и fail-closed на этом — ложноположительное срабатывание гейта.
+// Терминальность final ловит РОВНО два случая: тот же revision с ДРУГИМ содержимым, и ЛЮБОЙ другой
+// revision (после того, как значение объявлено окончательным).
+test('final(n) повторно с ИДЕНТИЧНЫМ содержимым — принят как идемпотентный дубль, терминальность не мешает', () => {
+  const res = checkRevisionTransition<number>(rev(2, 'final', 7), rev(2, 'final', 7));
+  assert.deepEqual(res, { outcome: 'duplicate' });
+});
 
-  const sameContent = checkRevisionTransition<number>(finalRev, rev(2, 'final', 7));
-  assert.equal(sameContent.outcome, 'rejected');
-  assert.equal((sameContent as { code: string }).code, 'observation_revision_finalized');
+test('final(n) повторно с ИЗМЕНЁННЫМ содержимым — отказ (corruption, не терминальность)', () => {
+  const res = checkRevisionTransition<number>(rev(2, 'final', 7), rev(2, 'final', 9));
+  assert.equal(res.outcome, 'rejected');
+  assert.equal((res as { code: string }).code, 'observation_revision_conflict');
+});
 
-  const nextRevision = checkRevisionTransition<number>(finalRev, rev(3, 'provisional', 8));
-  assert.equal(nextRevision.outcome, 'rejected');
-  assert.equal((nextRevision as { code: string }).code, 'observation_revision_finalized');
+test('final(n) → revision n+1 — отказ (терминальность в чистом виде)', () => {
+  const res = checkRevisionTransition<number>(rev(2, 'final', 7), rev(3, 'provisional', 8));
+  assert.equal(res.outcome, 'rejected');
+  assert.equal((res as { code: string }).code, 'observation_revision_finalized');
 });
 
 test('пропуск номера — отказ по умолчанию', () => {
