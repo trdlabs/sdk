@@ -12,3 +12,4 @@ export * from './risk-execution.js';
 export * from './run.js';
 export * from './module.js';
 export * from './market-tape.js';
+export * from './time-us.js';

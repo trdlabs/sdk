@@ -32,6 +32,7 @@ import type {
   TakerReading,
 } from './market-tape.js';
 import type { OrderType, TimeInForce } from './risk-execution.js';
+import type { TimestampUs } from './time-us.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Форма стратегии.
@@ -68,6 +69,66 @@ export const SINGLE_POSITION_ONLY_HOOKS = [
   'onPositionBar',
   'onPendingIntentBar',
 ] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Конверт события (S1, спека §3.1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Внешний порядок событий. Назначает scheduler, не автор. */
+export type Seq = number;
+
+/** Идентификатор подписки. Канонический и СТАБИЛЬНЫЙ — не UUID времени запуска. */
+export type SubscriptionId = string;
+
+/**
+ * Конверт: инварианты (инструмент, `params`, `seed`, дескрипторы подписок) уезжают один раз в
+ * `ActorInit`, здесь — только переменное.
+ *
+ * `eventTsUs` — **frontier диспатча U**, а не время значения. Разница выглядит избыточной,
+ * пока `U === T` (v1 всегда так), и вводится сразу по единственной причине: будущая ревизия
+ * минуты T, приехавшая во frontier `U > T`, иначе не имеет законного места. Её пришлось бы
+ * либо вставлять назад в уже дренированный frontier T (запрещено §3.8.2), либо двигать
+ * `clock.now()` назад (запрещено §3.1). Одна координата делает два уже принятых запрета
+ * несовместимыми с самой возможностью ревизий.
+ */
+export interface ActorEnvelope<E> {
+  readonly seq: Seq;
+  readonly eventTsUs: TimestampUs;
+  readonly subscriptionId: SubscriptionId;
+  readonly event: E;
+}
+
+/**
+ * Внутренняя запись scheduler'а. `observedTsUs` живёт ЗДЕСЬ и в run evidence, но НЕ в
+ * capability boundary актора.
+ *
+ * Жёсткость намеренная: «поле видно, но использовать его как часы нельзя» — дисциплинарный
+ * запрет, а недоверенная (тем более LLM-написанная) стратегия всё равно примет по нему решение.
+ * Прецедент — Ф0 (platform#145, #147), где бизнес-окна специально переводили на data-clock
+ * (дефект B1); привязка таймеров ко времени наблюдения воспроизвела бы его, но уже без дешёвого
+ * детектора (B1 ловился сравнением `speed=1` и `speed=60`).
+ */
+export interface ScheduledRecord<E> extends ActorEnvelope<E> {
+  readonly observedTsUs: TimestampUs;
+}
+
+/**
+ * Наблюдённое значение с собственной временной координатой.
+ *
+ * `effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision`
+ * ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования,
+ * потому что ревизованное значение само либо provisional, либо final.
+ *
+ * В v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями
+ * fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму
+ * события.
+ */
+export interface ObservedValue<T> {
+  readonly effectiveTsUs: TimestampUs;
+  readonly value: T;
+  readonly finality: 'provisional' | 'final';
+  readonly revision: number;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Читаемое состояние (pull-модель ctx).
