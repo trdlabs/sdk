@@ -29,14 +29,13 @@
 //   ledger'а (`actor-state.ts`), а не хранится отдельным полем.
 
 import type { MarketDataKind } from '../contract/constants.js';
-import type { Bar } from './context.js';
-import type {
-  FundingReading,
-  LiqPoint,
-  OiPoint,
-  TakerReading,
-} from './market-tape.js';
 import type { ObservationStatus } from './observation-status.js';
+import {
+  MAX_PLAIN_DATA_DEPTH,
+  hasOnlyPlainArrayKeys,
+  hasOnlyPlainOwnKeys,
+  isPlainObjectPrototype,
+} from './plain-data.js';
 import type { TimeInForce } from './risk-execution.js';
 import type { DurationUs, TimestampUs } from './time-us.js';
 
@@ -236,46 +235,137 @@ export type OrderSide = 'buy' | 'sell';
 // (эта форма), либо как окно через будущий pull-API ctx (задача 5) — конверт события не смешивает
 // оба способа доступа.
 
-/** Закрытая (историческая) свеча по своему `subscriptionId`. Значение — `Bar` (017). */
+// ─────────────────────────────────────────────────────────────────────────────
+// Значения рыночных событий — µs-чистые формы БЕЗ собственной метки времени.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// **Одна временная координата на событие — `ObservedValue.effectiveTsUs`, и никакой другой**
+// (финальная волна ревью ветки, Б-1). До этой правки пять рыночных событий несли ЛЕГАСИ-типы
+// значений из `market-tape.ts`/`context.ts` (`Bar`, `OiPoint`, `LiqPoint`, `TakerPoint`,
+// `FundingPoint`), у каждого из которых СВОЙ `ts: number` в МИЛЛИСЕКУНДАХ. На одном объекте
+// события оказывались две метки одного и того же момента в РАЗНЫХ единицах: `candle.effectiveTsUs`
+// (µs, бранд) и `candle.value.ts` (мс, голый `number`). Проверено прогоном: `event.candle.value.ts
+// - ctx.clock.nowUs()` КОМПИЛИРУЕТСЯ — бранд ловит присваивание, но не арифметику; схема принимала
+// событие, где обе метки не связаны ничем. Это делало ложными сразу две заявки: критерий этапа «в
+// актор-поверхности не осталось ни одного поля в миллисекундах» и строку CHANGELOG про «every
+// actor-surface timestamp moves to the branded µs types».
+//
+// Лечение — УБРАТЬ избыточную координату, а не приколотить её вторым бранд-полем: метка времени
+// значения ДУБЛИРУЕТ `effectiveTsUs` конверта, и две координаты одного момента и есть дефект.
+// Отсюда пять форм ниже: ровно поля-величины легаси-типов МИНУС их `ts`.
+//
+// Легаси-типы НЕ ТРОНУТЫ и трогать их нельзя: `Bar` — источник правды формы свечи 017 для формы
+// `single_position` (`StrategyContext.bar`, `PointInTimeDataApi.closedCandles`), `OiPoint`/
+// `LiqPoint`/`TakerPoint`/`FundingPoint` — для `PointInTimeMarketApi` (023/030). Там `ts: number`
+// в мс — часть released-контракта, у которого свои потребители и своя единица; событийная
+// поверхность актора просто перестала их переиспользовать.
+
+/**
+ * Значение свечного события — `Bar` (017) БЕЗ собственного `ts`: момент закрытой свечи несёт
+ * `ObservedValue.effectiveTsUs` конверта. Отдельный тип, а НЕ `Omit<Bar, 'ts'>`: `Omit` привязал бы
+ * событийную форму к легаси-типу, который живёт своей жизнью (добавление поля в `Bar` для нужд
+ * `single_position` молча расширило бы актор-поверхность), и такая связь читалась бы как обещание
+ * совместимости, которого нет.
+ */
+export interface CandleValue {
+  readonly open: number;
+  readonly high: number;
+  readonly low: number;
+  readonly close: number;
+  /** Объём закрытой свечи, `≥ 0`. */
+  readonly volume: number;
+}
+
+/**
+ * Open interest — **point observation**: значение есть УРОВЕНЬ на момент `oi.effectiveTsUs`, а не
+ * приращение с прошлого наблюдения (в отличие от liq/taker-бакетов ниже, которые суммируют события
+ * ВНУТРИ интервала).
+ */
+export interface OpenInterestValue {
+  /** Сырой OI notional в USD, `≥ 0` (маппинг канонической строки 010: `oi_total_usd`). */
+  readonly oiTotalUsd: number;
+}
+
+/**
+ * Ликвидации за закрытый бакет — **interval aggregate**. Покрытый бакет без единого каскада несёт
+ * `{ longUsd: 0, shortUsd: 0 }` — НАСТОЯЩЕЕ наблюдение со значением ноль, не «данных не было» (см.
+ * уровень 3 в шапке `observation-status.ts`).
+ */
+export interface LiquidationsValue {
+  readonly longUsd: number; // ≥ 0
+  readonly shortUsd: number; // ≥ 0
+}
+
+/**
+ * Taker-объём за закрытый бакет — **interval aggregate**. Как и у ликвидаций, `{0, 0}` — валидное
+ * present-наблюдение. delta (`buyUsd − sellUsd`) и кумулятивный CVD — derive-only, в контракте их
+ * нет: производная величина, посчитанная хостом, была бы вторым источником истины для той же пары.
+ */
+export interface TakerVolumeValue {
+  readonly buyUsd: number; // ≥ 0
+  readonly sellUsd: number; // ≥ 0
+}
+
+/**
+ * Funding: rate либо settlement — ОБА варианта используют это же событие с этим же значением.
+ * Различение — НЕ по величине: периодический rate-тик и settlement-выплата на границе интервала
+ * структурно неотличимы одним числом. Различение объявляется НА ПОДПИСКЕ (`form: 'rate' |
+ * 'settlement'`, `FundingMarketDataRequirement` ниже); в v1 `settlement` не резолвится вовсе,
+ * потому что колонки для него нет в архиве.
+ */
+export interface FundingValue {
+  /** Aggregated 8h-equiv ставка (027). `0` и отрицательная — валидные наблюдения, не отсутствие. */
+  readonly fundingRate: number;
+}
+
+// **Событие несёт ТОЛЬКО present-содержимое** (финальная волна ревью ветки, Б-2). До этой правки
+// taker/funding несли трёхсостоянийные `TakerReading`/`FundingReading` (`present|stale|missing`)
+// ВНУТРИ `ObservedValue` — и проверено по отгружаемой схеме, что
+// `market.taker_volume.bucket_closed` со `value: {state:'missing'}` был ВАЛИДНЫМ событием. Словарь
+// тем самым допускал самопротиворечивое высказывание: «наблюдено (observed, final, revision 0),
+// что бакет закрыт; значение — бакета не было». Плюс пять событий были несогласованы между собой:
+// oi/liq несли голые точки, taker/funding — ридинги, свеча — `Bar`.
+//
+// Отсутствие наблюдения выражается ЕДИНСТВЕННЫМ каналом — `market.subscription.status_changed`
+// (§3.11.2, ветка `'gap'` полного `ObservationStatus`), а «вида нет в прогоне вовсе» — статическим
+// `ActorInit.subscriptions` (§3.11.1). Три уровня «данных нет» и их носители перечислены в шапке
+// `observation-status.ts`; ни один из них не является полем ЗНАЧЕНИЯ рыночного события.
+//
+// `stale` (bounded live-forward funding, незавершённый taker-бакет) не переехал в другое место
+// контракта и не потерян: событие ЭМИТИТСЯ на ЗАКРЫТИИ бакета / на реальном наблюдении, то есть
+// состояния «значение ещё не готово» на событийной поверхности не существует в принципе — оно было
+// свойством PULL-модели `PointInTimeMarketApi` (`fundingAsOf()` спрашивают в произвольный момент,
+// и он обязан ответить «снимок есть, но просрочен»). Ридинги остаются там, где им место, — в
+// `market-tape.ts`, у формы `single_position`.
+
+/** Закрытая (историческая) свеча по своему `subscriptionId`. */
 export interface MarketCandleClosedEvent {
   readonly kind: 'market.candle.closed';
-  readonly candle: ObservedValue<Bar>;
+  readonly candle: ObservedValue<CandleValue>;
 }
 
-/**
- * Open interest — **point observation**: `oi.value` есть УРОВЕНЬ на момент `oi.effectiveTsUs`,
- * а не приращение с прошлого наблюдения (в отличие от liq/taker-бакетов ниже, которые суммируют
- * события ВНУТРИ интервала).
- */
+/** Open interest — point observation своего `subscriptionId` (см. `OpenInterestValue`). */
 export interface MarketOpenInterestObservedEvent {
   readonly kind: 'market.open_interest.observed';
-  readonly oi: ObservedValue<OiPoint>;
+  readonly oi: ObservedValue<OpenInterestValue>;
 }
 
-/** Ликвидации — **interval aggregate** за закрытый бакет своего `subscriptionId`. */
+/** Ликвидации — interval aggregate за закрытый бакет своего `subscriptionId`. */
 export interface MarketLiquidationsBucketClosedEvent {
   readonly kind: 'market.liquidations.bucket_closed';
-  readonly liq: ObservedValue<LiqPoint>;
+  readonly liq: ObservedValue<LiquidationsValue>;
 }
 
-/** Taker-объём — **interval aggregate** за закрытый минутный бакет своего `subscriptionId`. */
+/** Taker-объём — interval aggregate за закрытый минутный бакет своего `subscriptionId`. */
 export interface MarketTakerVolumeBucketClosedEvent {
   readonly kind: 'market.taker_volume.bucket_closed';
-  readonly taker: ObservedValue<TakerReading>;
+  readonly taker: ObservedValue<TakerVolumeValue>;
 }
 
-/**
- * Funding: rate либо settlement — ОБА варианта используют это же событие с тем же
- * `FundingReading`. Различение — НЕ по значению `{ts, fundingRate}`: периодический rate-тик и
- * settlement-выплата на границе интервала по этой паре структурно неотличимы. Различение
- * объявляется НА ПОДПИСКЕ (`form: 'rate' | 'settlement'`, задача 3 — здесь не опережается); в v1
- * `settlement` не резолвится вовсе, потому что датасета для него нет. Заводить здесь новый
- * value-тип для funding означало бы проектировать его заново, а задача просит ровно
- * `FundingReading` из `market-tape.js`.
- */
+/** Funding — наблюдение ставки своего `subscriptionId` (см. `FundingValue`). */
 export interface MarketFundingObservedEvent {
   readonly kind: 'market.funding.observed';
-  readonly funding: ObservedValue<FundingReading>;
+  readonly funding: ObservedValue<FundingValue>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -325,10 +415,12 @@ export interface MarketSubscriptionStatusChangedEvent {
 // рантайма (диспетчер уже переключает по `kind` через `switch`+`assertNever`, новый `case` —
 // локальное изменение). Форм этих событий эта задача не проектирует.
 
-// `ts` во всех шести событиях ниже — `TimestampUs`, НЕ `number` (было так до раунда правок 1,
-// I-7): пять рыночных событий и статус уже µs, а order.*/fill/timer оставались в мс — ровно то
-// сосуществование двух единиц, ради защиты от которого §3.2 вводит бранд-типы (забытый `* 1000`
-// перестаёт быть исполняемым кодом только когда ВСЯ поверхность актора в одной единице).
+// `ts` в КАЖДОМ событии ниже — `TimestampUs`, НЕ `number` (было так до раунда правок 1, I-7):
+// рыночные события и статус уже µs, а order.*/fill/timer оставались в мс — ровно то сосуществование
+// двух единиц, ради защиты от которого §3.2 вводит бранд-типы (забытый `* 1000` перестаёт быть
+// исполняемым кодом только когда ВСЯ поверхность актора в одной единице — что стало правдой лишь в
+// финальной волне ревью ветки: до неё значения пяти рыночных событий несли мс-метку легаси-типов,
+// см. блок «Значения рыночных событий» выше).
 
 /** Заявка принята средой (venue/симулятором). */
 export interface ActorOrderAcceptedEvent {
@@ -424,6 +516,65 @@ export interface ActorTimerEvent {
   readonly timerId: string;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TradingState — режим торговли, назначаемый ХОСТОМ (§3.10).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Режим торговли инстанса, которым распоряжается ХОСТ, а не актор. Спека §3.10: при остановившемся
+ * фиде бизнес-время не двигается, protective-таймеры актора честно замирают, и компенсирует это
+ * **host-watchdog** — он наблюдает staleness источника и переводит `TradingState` в `'reducing'`
+ * (растить экспозицию нельзя, отмены и reduce-only проходят) либо `'halted'` (только `cancel`).
+ * Watchdog вне детерминированного контура, поэтому Л4 (cross-host parity) он не ломает.
+ *
+ * **Почему это S1, а не S5.** Спека §3.10 дословно: «Требование называется в S1 (актор наблюдает
+ * переход), реализуется в S5». Без НАЗВАННОГО состояния LLM-автор не может выразить «не наращивай
+ * экспозицию, хост в reducing» ничем, кроме парсинга свободного текста `order.denied.reason` — то
+ * есть строил бы политику на строке, которую контракт не обязывался держать стабильной. Здесь —
+ * ФОРМА (каталог, событие перехода, чтение текущего режима из `ctx`); сам watchdog, его пороги
+ * staleness и проводка режима в RiskEngine — долг **S5** (`platform`), названный тем же способом,
+ * что остальные долги этого файла (детектор breach бюджетов — S2, прогрев — S2, резолвер подписок
+ * — задача 8).
+ *
+ * **Регистр значений.** Спека пишет `REDUCING`/`HALTED` капслоком — это прозаическое выделение
+ * автомата, а не объявление литералов. В пакете ЕДИНЫЙ регистр закрытых каталогов (`'submitted'`,
+ * `'final_only'`, `'single_position'`, `'stop_market'`, `'gtc'`), и ломать его ради типографики
+ * прозы значило бы завести две конвенции в одном замороженном словаре.
+ */
+export type TradingState = 'normal' | 'reducing' | 'halted';
+
+/**
+ * Замкнутый каталог режимов торговли. Согласован с `TradingState` в ОБЕ стороны той же идиомой, что
+ * `ACTOR_INPUT_EVENT_KINDS` ниже: `satisfies` — массив не шире типа, `_AssertNoUncoveredTradingState`
+ * — тип не шире массива.
+ */
+export const TRADING_STATES = ['normal', 'reducing', 'halted'] as const satisfies readonly TradingState[];
+
+/**
+ * Переход режима торговли. Эмитится ХОСТОМ на САМОМ переходе — `previous !== state` всегда (режим,
+ * не изменившийся на очередном тике watchdog'а, события не порождает: иначе актор получал бы шум на
+ * каждом тике вместо сигнала об изменении — та же дисциплина, что у
+ * `MarketSubscriptionStatusChangedEvent` выше). Равенство полей типом не запрещено (два одинаковых
+ * литерала типизируются) — это инвариант ЭМИТТЕРА, как и «gap-событие ровно один раз».
+ *
+ * Событие несёт ОБА конца перехода, хотя `state` дублирует `ctx.tradingState` к моменту вызова
+ * хендлера (инвариант state-before-handler, см. `ActorContext`). Это не то же дублирование, что
+ * закрыл Б-1: событие — ЗАПИСЬ О СЛУЧИВШЕМСЯ, `ctx` — снимок ТЕКУЩЕГО; ровно так же устроен `fill`
+ * (несёт `price`/`qty`, хотя `ctx.position()` их уже учёл). А `previous` из `ctx` не выводится
+ * ВООБЩЕ — без него «вернулись в normal из halted» и «вернулись в normal из reducing» были бы для
+ * автора одним и тем же наблюдением.
+ *
+ * Поля `reason` НЕТ намеренно: закрытого каталога причин спека не даёт, а свободная строка
+ * воспроизвела бы ровно ту дыру, ради закрытия которой это событие заведено (политика, построенная
+ * на разборе человеческого текста). Диагностика причины — забота evidence прогона, не актора.
+ */
+export interface ActorTradingStateChangedEvent {
+  readonly kind: 'trading_state.changed';
+  readonly ts: TimestampUs;
+  readonly previous: TradingState;
+  readonly state: TradingState;
+}
+
 /** Замкнутый union входных событий актора. */
 export type ActorInputEvent =
   | MarketCandleClosedEvent
@@ -439,7 +590,8 @@ export type ActorInputEvent =
   | ActorOrderCancelRejectedEvent
   | ActorOrderExpiredEvent
   | ActorFillEvent
-  | ActorTimerEvent;
+  | ActorTimerEvent
+  | ActorTradingStateChangedEvent;
 
 /**
  * Все виды входных событий (для проверок полноты диспетчера).
@@ -469,6 +621,7 @@ export const ACTOR_INPUT_EVENT_KINDS = [
   'order.expired',
   'fill',
   'timer',
+  'trading_state.changed',
 ] as const satisfies readonly ActorInputEvent['kind'][];
 
 export type ActorInputEventKind = (typeof ACTOR_INPUT_EVENT_KINDS)[number];
@@ -487,6 +640,15 @@ type AssertNoUncoveredKind<T extends never> = T;
  * (`TS2344: Type "..." does not satisfy the constraint 'never'`).
  */
 type _AssertNoUncoveredKind = AssertNoUncoveredKind<Exclude<ActorInputEvent['kind'], ActorInputEventKind>>;
+
+/**
+ * Обратное направление для каталога режимов торговли: значение `TradingState`, забытое в
+ * `TRADING_STATES`, ломает сборку здесь же (TS2344). Прямое направление даёт `satisfies` на самом
+ * массиве (см. `TRADING_STATES`).
+ */
+type _AssertNoUncoveredTradingState = AssertNoUncoveredKind<
+  Exclude<TradingState, (typeof TRADING_STATES)[number]>
+>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ActorCommand — что актор просит у хоста.
@@ -911,9 +1073,18 @@ export type ActorWarmupSource = { readonly kind: 'tape_replay' } | { readonly ki
 
 /**
  * Значение, законное в авторском state-слоте актора. Рекурсивный plain-data union — ровно то
- * подмножество JS-значений, что `JSON.parse(JSON.stringify(x))` восстанавливает БЕЗ потерь и без
- * молчаливых искажений (в отличие, например, от объекта с ключом `undefined`-значения, который
- * `JSON.stringify` тихо роняет, или от `Date`, который превращается в строку и теряет тип).
+ * подмножество JS-значений, у которых `JSON.parse(JSON.stringify(x))` восстанавливает КАЖДОЕ
+ * СКАЛЯРНОЕ значение и структуру дерева без молчаливых искажений (в отличие, например, от объекта с
+ * ключом `undefined`-значения, который `JSON.stringify` тихо роняет, или от `Date`, который
+ * превращается в строку и теряет тип).
+ *
+ * **«Без потерь» — про значения, НЕ про идентичность ссылок** (финальная волна ревью ветки, F-1:
+ * прежняя формулировка «восстанавливает БЕЗ потерь» была шире правды). Разделяемая ссылка
+ * (легитимный DAG: два поля указывают на ОДИН объект) переживает границу как ДВЕ независимые копии
+ * с тем же содержимым — разделение идентичности теряется, и вместе с ним теряется РАЗМЕР: `n`
+ * объектов, каждый со ссылкой на предыдущий дважды, разворачиваются в `2ⁿ` узлов JSON.
+ * `isPlainActorState` ниже поэтому считает не только глубину, но и размер развёртки
+ * (`MAX_ACTOR_STATE_EXPANDED_NODES`) и отклоняет то, что физически не переживёт `JSON.stringify`.
  *
  * Явно ЗАКРЫТ на верхнем уровне: `null`/`boolean`/`string`/конечное `number`/массив/plain-объект.
  * `NaN`/`Infinity` не входят (типовое ограничение `number` их не исключает, но `isPlainActorState`
@@ -943,64 +1114,64 @@ export type ActorStateValue =
   | { readonly [key: string]: ActorStateValue };
 
 /**
- * «Чистота» собственных ключей ОБЪЕКТА (не массива — см. `hasOnlyPlainArrayKeys` ниже, у массива
- * есть законный неперечислимый `length`). Отвергает символьный ключ, неперечислимый ключ, accessor
- * (get/set) — `Object.values`/`Object.keys` перечисляют ТОЛЬКО собственные ПЕРЕЧИСЛИМЫЕ СТРОКОВЫЕ
- * ключи и потому МОЛЧА пропускают все три (ревью раунда 1, I-4, прогон: функция под символьным
- * ключом и неперечислимое свойство-функция обе принимались бы прежней версией). `Reflect.ownKeys`
- * перечисляет буквально ВСЁ — единственный способ увидеть то, что `Object.values` прячет.
- *
- * ЭКСПОРТИРОВАНА (ревью раунда 4, Important) — `actor-state.ts` переиспользует ЭТУ ЖЕ проверку
- * дескрипторов для `isExecutionLedgerEntry`, а не дублирует свою копию: doc `hasExactOwnKeys`
- * (`actor-state.ts`) заявляла паритет строгости с этим гейтом, но паритет не переиспользованием НЕ
- * достигается сам собой — прогон ревью нашёл class-инстанс верной формы, `qty` через `get`-accessor
- * и неперечислимое поле, которые `isExecutionLedgerEntry` пропускал, а этот гейт — нет. Один и тот
- * же вызов вместо двух копий одной логики закрывает класс «гейты одной границы разошлись» СТРУКТУРНО
- * (тот же принцип, что уже применён к `ACTOR_INPUT_EVENT_KINDS`/`AssertNoUncoveredKind`).
- */
-export function hasOnlyPlainOwnKeys(obj: object): boolean {
-  for (const key of Reflect.ownKeys(obj)) {
-    if (typeof key === 'symbol') return false;
-    const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-    if (descriptor === undefined || !descriptor.enumerable) return false;
-    if (descriptor.get !== undefined || descriptor.set !== undefined) return false;
-  }
-  return true;
-}
-
-/**
- * «Чистота» собственных ключей МАССИВА: РОВНО канонические индексы `0..length-1` строками плюс
- * встроенный неперечислимый `length` — и ничего сверх. Ловит оба array-специфичных пробела I-4
- * ревью: sparse-дыру (`[1, , 3]` — `Reflect.ownKeys` не перечисляет ОТСУТСТВУЮЩИЙ индекс 1, значит
- * `keys.length !== arr.length + 1`; `JSON.stringify` превращает дыру в `null` — значение до/после
- * границы уже не одно и то же) и добавленное нечисловое свойство (`arr.extra = fn` — по умолчанию
- * ПЕРЕЧИСЛИМО, но `.every()` по индексам его никогда не увидит, раз оно не индекс).
- */
-function hasOnlyPlainArrayKeys(arr: readonly unknown[]): boolean {
-  const keys = Reflect.ownKeys(arr);
-  if (keys.length !== arr.length + 1) return false; // +1 — встроенный `length`.
-  for (const key of keys) {
-    if (key === 'length') continue;
-    if (typeof key === 'symbol') return false;
-    const index = Number(key);
-    if (!Number.isInteger(index) || index < 0 || index >= arr.length) return false;
-    const descriptor = Object.getOwnPropertyDescriptor(arr, key);
-    if (descriptor === undefined || !descriptor.enumerable) return false;
-    if (descriptor.get !== undefined || descriptor.set !== undefined) return false;
-  }
-  return true;
-}
-
-/**
  * Практический потолок глубины вложенности (ревью раунда 2, новый дефект: недоверенный ГЛУБОКИЙ
  * вход валил функцию, документированную КАК ГЕЙТ недоверенного JSON, необработанным
  * `RangeError: Maximum call stack size exceeded` на глубине ~5000 — сигнатура обещает `value is
  * ActorStateValue`, а не крах, и `RangeError` того же конструктора, что намеренно бросает
- * `derivePositionView` (`actor-state.ts`), неотличим вызывающим от НЕЙ). `500` — на порядок больше
- * любой реалистичной глубины авторского состояния (счётчики/скользящие окна/индикаторы — считанные
- * уровни вложенности, не тысячи) и безопасно ниже предела стека V8 для этой функции.
+ * `derivePositionView` (`actor-state.ts`), неотличим вызывающим от НЕЙ).
+ *
+ * Значение живёт в `plain-data.ts` (`MAX_PLAIN_DATA_DEPTH`) с финальной волны ревью ветки: тот же
+ * потолок применяет `deepValueEquals` (`observation-status.ts`), у которого нашли ровно тот же
+ * дефект — `RangeError` вместо вердикта на глубоком и на циклическом значении.
  */
-const MAX_ACTOR_STATE_DEPTH = 500;
+const MAX_ACTOR_STATE_DEPTH = MAX_PLAIN_DATA_DEPTH;
+
+/**
+ * Потолок РАЗМЕРА JSON-развёртки авторского состояния — число узлов (объектов, элементов массива и
+ * скаляров), которые `JSON.stringify` обязан выписать (финальная волна ревью ветки, F-1).
+ *
+ * **Зачем отдельно от глубины.** Разделяемая (не циклическая) ссылка законна и `isPlainActorState`
+ * её принимает — но через границу JSON она едет РАЗВЁРНУТОЙ, по копии на каждый путь к ней. DAG
+ * глубиной `n`, где каждый узел ссылается на предыдущий ДВАЖДЫ, — это `n+1` объект в памяти и `2ⁿ`
+ * узлов в JSON. Прогон финального ревью: 21 объект (`DAG(20)`) — `isPlainActorState` = `true` за
+ * <1 мс, `JSON.stringify` = 22 020 085 символов за 263 мс; 28 объектов (`DAG(27)`) —
+ * `isPlainActorState` = `true` мгновенно, `JSON.stringify` = **`RangeError: Invalid string length`
+ * через 28.7 с**. Автору такое состояние стоит нуля, границе персиста — краха вдали от причины.
+ *
+ * **Величина — ИЗМЕРЕНА, не угадана.** Замер `JSON.stringify` по числу узлов на этой машине:
+ * 1e5 → 0.59 МБ / 4 мс; **1e6 → 6.9 МБ / 45 мс**; 4e6 → 31 МБ / 186 мс; 1.6e7 → 133 МБ / 745 мс.
+ * Измеренная плотность — 6.9…8.3 символа на узел; потолок строки V8 — 536 870 888 символов, то
+ * есть РАСЧЁТНАЯ граница краха лежит около `6·10⁷` узлов, а НАБЛЮДЁННЫЙ крах — `DAG(27)` ≈ `4·10⁸`
+ * узлов (расчётную границу он проскочил, потому что промежуточных замеров между 1.6e7 и 4e8 не
+ * делалось). Выбранный `1e6` — чекпойнт, который заведомо сериализуется (6.9 МБ, 45 мс), с запасом
+ * ~60× до расчётной границы и ~400× до наблюдённого краха.
+ *
+ * **Цена названа явно:** порог — БЮДЖЕТ, а не детектор патологии, и применяется одинаково к обеим
+ * формам её достижения. Плоское окно на 1 000 000 элементов отклоняется тем же числом, что и
+ * 21-объектный DAG, — предикат ФОРМЫ не может отличить «большое честное состояние» от «маленькое
+ * состояние с экспоненциальной развёрткой», потому что для `JSON.stringify` это одно и то же.
+ * Прежнее суждение («не load-bearing, чинится строкой доки») отменено владельцем: `isPlainActorState`
+ * — документированная обязанность хоста на границе персиста и единственный заслон между
+ * `snapshotState()` и крахом сериализации.
+ */
+const MAX_ACTOR_STATE_EXPANDED_NODES = 1_000_000;
+
+/**
+ * Что обход УЖЕ доказал про поддерево подтверждённого узла (memo-запись `confirmed`).
+ *
+ * - `height` — сколько уровней рекурсии поддерево ДОБАВЛЯЕТ сверх глубины самого узла;
+ * - `expandedSize` — сколько узлов JSON-развёртки поддерево стоит, включая сам узел.
+ *
+ * Обе величины — свойства ПОДДЕРЕВА, а не его положения в графе, поэтому мемоизируются вместе и
+ * переиспользуются на любом пути к узлу.
+ */
+interface ConfirmedSubtree {
+  readonly height: number;
+  readonly expandedSize: number;
+}
+
+/** Метрики примитива: сам узел стоит одного узла развёртки и не углубляет обход. */
+const PRIMITIVE_SUBTREE: ConfirmedSubtree = { height: 0, expandedSize: 1 };
 
 /**
  * Рекурсивный обход с отслеживанием ТЕКУЩЕГО ПУТИ предков (не всех когда-либо посещённых узлов):
@@ -1040,13 +1211,23 @@ const MAX_ACTOR_STATE_DEPTH = 500;
  * от места дефекта.
  *
  * `height(obj)` — сколько уровней рекурсии ДОБАВЛЯЕТ поддерево `obj` сверх глубины, на которой сам
- * `obj` встречен (0 — обход не идёт глубже `obj`, то есть все поля/элементы — примитивы; 1 —
- * ровно один уровень дальше; и т.д., РАВНО максимуму по потомкам плюс один, где потомок дал СВОЙ
- * `height`). При попадании в `confirmed` вместо слепого `true` — проверка `depth + height <=
- * MAX_ACTOR_STATE_DEPTH`: РОВНО тот же порог, что дал бы честный обход БЕЗ memo, свернутый в O(1).
- * Отрицательный исход этой проверки НЕ мемоизируется (глубина, на которой обнаружен избыток, —
- * свойство ТЕКУЩЕГО положения объекта в графе, не самого объекта — на другой, более мелкой
- * глубине тот же `obj` мог бы уложиться).
+ * `obj` встречен. `0` — у узла НЕТ потомков вовсе (пустой объект/массив: обход не идёт дальше);
+ * `1` — все потомки примитивны (финальная волна ревью, F-4: прежняя доc называла этот случай
+ * нулевым, тогда как код даёт единицу — `height` примитива-потомка `0`, плюс один за сам шаг
+ * рекурсии); дальше — максимум по потомкам плюс один, где потомок дал СВОЙ `height`. При попадании
+ * в `confirmed` вместо слепого `true` — проверка `depth + height <= MAX_ACTOR_STATE_DEPTH`: РОВНО
+ * тот же порог, что дал бы честный обход БЕЗ memo, свернутый в O(1). Отрицательный исход этой
+ * проверки НЕ мемоизируется (глубина, на которой обнаружен избыток, — свойство ТЕКУЩЕГО положения
+ * объекта в графе, не самого объекта — на другой, более мелкой глубине тот же `obj` мог бы
+ * уложиться).
+ *
+ * `expandedSize(obj)` (финальная волна ревью, F-1) — вторая мемоизируемая величина рядом с
+ * `height`: число узлов, которые `JSON.stringify` выпишет для поддерева `obj`, ВКЛЮЧАЯ сам `obj`.
+ * Считается ровно так же, как height, только суммой вместо максимума, и сравнивается с
+ * `MAX_ACTOR_STATE_EXPANDED_NODES` НА КАЖДОМ шаге накопления — то есть обход прекращается на первом
+ * же потомке, переполнившем бюджет, а не после того, как посчитает всю экспоненту (`2ⁿ` от
+ * разделяемых ссылок никогда не материализуется как число). Переполнение — `false`, fail-closed,
+ * и НЕ мемоизируется, как и любой отрицательный исход.
  *
  * Сложность — `O(V + E)` (различные объекты плюс рёбра/ссылки НА них), НЕ `O(V)` (Minor, ревью
  * раунда 4: доc `isPlainActorState` формулировала это как «O(число различных объектов)» — прогон
@@ -1064,7 +1245,7 @@ const MAX_ACTOR_STATE_DEPTH = 500;
 function isPlainDataValue(
   value: unknown,
   ancestors: Set<object>,
-  confirmed: Map<object, number>,
+  confirmed: Map<object, ConfirmedSubtree>,
   depth: number,
 ): boolean {
   if (depth > MAX_ACTOR_STATE_DEPTH) return false; // fail-closed, не падение стека — см. doc выше.
@@ -1087,15 +1268,18 @@ function isPlainDataValue(
   if (t !== 'object') return false;
 
   const obj = value as object;
-  const knownHeight = confirmed.get(obj);
-  if (knownHeight !== undefined) {
+  const known = confirmed.get(obj);
+  if (known !== undefined) {
     // Memo-попадание НЕ возвращает `true` слепо (C-4) — тот же порог, что дал бы честный обход.
-    return depth + knownHeight <= MAX_ACTOR_STATE_DEPTH;
+    // `expandedSize` здесь НЕ проверяется: он уже был ≤ бюджета (иначе узел не попал бы в memo), а
+    // его вклад В СУММУ РОДИТЕЛЯ считает сам родитель, ниже по циклу.
+    return depth + known.height <= MAX_ACTOR_STATE_DEPTH;
   }
   if (ancestors.has(obj)) return false; // настоящий цикл — см. doc выше.
   ancestors.add(obj);
   let ok = false;
   let height = 0; // Максимум по потомкам + 1; остаётся 0, если потомков, требующих рекурсии, нет.
+  let expandedSize = 1; // Сам узел + сумма по потомкам; сравнивается с бюджетом на каждом шаге.
   try {
     if (Array.isArray(obj)) {
       if (hasOnlyPlainArrayKeys(obj)) {
@@ -1105,24 +1289,30 @@ function isPlainDataValue(
             ok = false;
             break;
           }
-          height = Math.max(height, childHeight(item, confirmed) + 1);
-        }
-      }
-    } else {
-      // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены: их прототип — не
-      // Object.prototype и не null (`Object.create(null)` — легитимный plain-объект без прототипа,
-      // тоже должен проходить). Белый список: вместо перечисления запрещённых конструкторов
-      // (который расширяющийся JS никогда не даст исчерпать) проверяется РОВНО принадлежность к
-      // двум разрешённым формам прототипа.
-      const proto = Object.getPrototypeOf(obj);
-      if ((proto === Object.prototype || proto === null) && hasOnlyPlainOwnKeys(obj)) {
-        ok = true;
-        for (const v of Object.values(obj as Record<string, unknown>)) {
-          if (!isPlainDataValue(v, ancestors, confirmed, depth + 1)) {
+          const child = childSubtree(item, confirmed);
+          height = Math.max(height, child.height + 1);
+          expandedSize += child.expandedSize;
+          if (expandedSize > MAX_ACTOR_STATE_EXPANDED_NODES) {
             ok = false;
             break;
           }
-          height = Math.max(height, childHeight(v, confirmed) + 1);
+        }
+      }
+    } else if (isPlainObjectPrototype(obj) && hasOnlyPlainOwnKeys(obj)) {
+      // Экзотические объекты (Date/Map/Set/RegExp/класс-инстанс) отклонены прототипом — белый
+      // список из двух разрешённых форм, см. doc `isPlainObjectPrototype` (`plain-data.ts`).
+      ok = true;
+      for (const v of Object.values(obj as Record<string, unknown>)) {
+        if (!isPlainDataValue(v, ancestors, confirmed, depth + 1)) {
+          ok = false;
+          break;
+        }
+        const child = childSubtree(v, confirmed);
+        height = Math.max(height, child.height + 1);
+        expandedSize += child.expandedSize;
+        if (expandedSize > MAX_ACTOR_STATE_EXPANDED_NODES) {
+          ok = false;
+          break;
         }
       }
     }
@@ -1132,21 +1322,24 @@ function isPlainDataValue(
     // разделяемую ссылку.
     ancestors.delete(obj);
   }
-  if (ok) confirmed.set(obj, height); // мемо ТОЛЬКО положительного исхода — см. doc выше, почему.
+  // Мемо ТОЛЬКО положительного исхода — см. doc выше, почему. Раз `ok`, то и `expandedSize` уже
+  // уложился в бюджет: цикл выше прерывается на первом же переполнении.
+  if (ok) confirmed.set(obj, { height, expandedSize });
   return ok;
 }
 
 /**
- * Высота ОДНОГО потомка `child` для накопления `height` родителя (см. doc `isPlainDataValue`):
- * примитив/`null` — 0 (обход не идёт глубже него); объект/массив — его СОБСТВЕННЫЙ `height`, уже
- * посчитанный (и, значит, лежащий в `confirmed`, раз мы сюда попали ПОСЛЕ успешной рекурсии в
- * него секундой строкой выше). Отдельная маленькая функция, а не инлайн: избегает пересчёта через
- * повторный вызов `isPlainDataValue` (который заново тратил бы `ancestors`/`depth` без надобности
- * — высота примитива и высота уже подтверждённого объекта читаются, а не выводятся заново).
+ * Метрики ОДНОГО потомка `child` для накопления `height`/`expandedSize` родителя (см. doc
+ * `isPlainDataValue`): примитив/`null` — `PRIMITIVE_SUBTREE` (обход не идёт глубже него, стоит он
+ * один узел развёртки); объект/массив — его СОБСТВЕННЫЕ метрики, уже посчитанные (и, значит,
+ * лежащие в `confirmed`, раз мы сюда попали ПОСЛЕ успешной рекурсии в него строкой выше).
+ * Отдельная маленькая функция, а не инлайн: избегает пересчёта через повторный вызов
+ * `isPlainDataValue` (который заново тратил бы `ancestors`/`depth` без надобности — метрики
+ * примитива и уже подтверждённого объекта читаются, а не выводятся заново).
  */
-function childHeight(child: unknown, confirmed: ReadonlyMap<object, number>): number {
-  if (child === null || typeof child !== 'object') return 0;
-  return confirmed.get(child) ?? 0;
+function childSubtree(child: unknown, confirmed: ReadonlyMap<object, ConfirmedSubtree>): ConfirmedSubtree {
+  if (child === null || typeof child !== 'object') return PRIMITIVE_SUBTREE;
+  return confirmed.get(child) ?? PRIMITIVE_SUBTREE;
 }
 
 /**
@@ -1155,9 +1348,12 @@ function childHeight(child: unknown, confirmed: ReadonlyMap<object, number>): nu
  * `symbol`/`bigint`/`undefined`-в-структуре, `NaN`/`Infinity`/`-0`, экзотические объекты
  * (`Date`/`Map`/`Set`/класс-инстанс), sparse-массивы, добавленные нечисловые свойства массива,
  * вложенность глубже `MAX_ACTOR_STATE_DEPTH` (fail-closed `false`, не исключение, НА ЛЮБОМ пути
- * достижения узла — раунд 4 закрыл memo-обход этой границы, см. doc `isPlainDataValue`). Принимает
- * вложенную структуру из `null`/`boolean`/`string`/конечных `number`/плотных массивов/plain-
- * объектов до предельной глубины, ДЕРЕВОМ либо DAG'ом — разделяемая (не циклическая) ссылка
+ * достижения узла — раунд 4 закрыл memo-обход этой границы, см. doc `isPlainDataValue`) и
+ * JSON-развёртку крупнее `MAX_ACTOR_STATE_EXPANDED_NODES` (финальная волна ревью, F-1: DAG из 28
+ * объектов разворачивался в ~4·10⁸ узлов и ронял `JSON.stringify` `RangeError`'ом через 28.7 с —
+ * гейт при этом отвечал `true`). Принимает вложенную структуру из
+ * `null`/`boolean`/`string`/конечных `number`/плотных массивов/plain-объектов до предельной глубины
+ * И в пределах бюджета развёртки, ДЕРЕВОМ либо DAG'ом — разделяемая (не циклическая) ссылка
  * учитывается по СТОИМОСТИ один раз через memo (`confirmed`, ревью раунда 3), а не переисследуется
  * по каждому пути к ней: стоимость — O(V + E) (различные объекты плюс рёбра/ссылки на них, а не
  * «O(число различных объектов)», как утверждала дока раунда 3 — прогон ревью раунда 4: 2 различных
@@ -1386,6 +1582,10 @@ export interface ActorRng {
  * `orders`/`position` (задача 5, требование 2) — доступ к открытым заявкам и к позиции; ОБЕ формы
  * (`OpenOrderView`/`PositionView`, выше) читаются как СНИМОК на момент вызова, не как живая ссылка
  * — мутировать их нельзя, дальнейшее состояние актор получает только СЛЕДУЮЩИМ вызовом `onEvent`.
+ * `tradingState` (§3.10, финальная волна ревью ветки, Б-3) — режим, назначенный ХОСТОМ; читается
+ * тем же инвариантом state-before-handler, что и всё остальное в `ctx`: к моменту вызова хендлера
+ * `trading_state.changed` поле УЖЕ несёт новый режим. Без него единственным способом узнать «хост в
+ * reducing» был бы разбор свободного текста `order.denied.reason` (см. `TradingState`).
  *
  * `orders.open`/`position` — readonly-ПОЛЯ функционального типа, НЕ method-синтаксис (ревью раунда
  * 1, M-5: method-синтаксис в интерфейсе НЕ несёт `readonly`, то есть формально переприсваиваем —
@@ -1395,6 +1595,8 @@ export interface ActorContext {
   readonly clock: { nowUs(): TimestampUs };
   readonly rng: ActorRng;
   readonly readiness: ActorReadiness;
+  /** Режим торговли, назначенный хостом (§3.10). См. `TradingState`. */
+  readonly tradingState: TradingState;
   readonly orders: { readonly open: () => readonly OpenOrderView[] };
   readonly position: () => PositionView | undefined;
 }
@@ -1684,6 +1886,10 @@ export type ActorHandlers<S extends ActorStateValue = ActorStateValue> = {
   onOrderExpired?(event: ActorOrderExpiredEvent, ctx: ActorContext): ActorHandlerResult;
   onFill?(event: ActorFillEvent, ctx: ActorContext): ActorHandlerResult;
   onTimer?(event: ActorTimerEvent, ctx: ActorContext): ActorHandlerResult;
+  onTradingStateChanged?(
+    event: ActorTradingStateChangedEvent,
+    ctx: ActorContext,
+  ): ActorHandlerResult;
   /** Catch-all: получает события, для которых нет специфичного хендлера. */
   onEvent?(event: ActorInputEvent, ctx: ActorContext): ActorHandlerResult;
 } & (ActorStateValue extends S
@@ -1784,6 +1990,9 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
         break;
       case 'timer':
         if (handlers.onTimer) return toBatch(handlers.onTimer(event, ctx));
+        break;
+      case 'trading_state.changed':
+        if (handlers.onTradingStateChanged) return toBatch(handlers.onTradingStateChanged(event, ctx));
         break;
       default: {
         // Замкнутый union: недостижимо, пока каталог и типы согласованы.

@@ -30,17 +30,17 @@ import {
   type ActorStateValue,
   type ActorSubscriptionDescriptor,
   type EventDrivenModule,
-  type FundingReading,
-  type LiqPoint,
+  type FundingValue,
+  type LiquidationsValue,
   type MarketDataRequirement,
   type ModuleManifest,
   type ObservedValue,
-  type OiPoint,
+  type OpenInterestValue,
   type OpenLimitOrderView,
   type OpenMarketOrderView,
   type OpenOrderView,
   type StrategyActor,
-  type TakerReading,
+  type TakerVolumeValue,
 } from '../src/research-contract/index.js';
 import { validate, schemaAsset } from '../src/validation/index.js';
 import { createSchemaRegistry } from '../src/validation/schema-registry.js';
@@ -248,6 +248,9 @@ const CTX_STUB: ActorContext = {
   // 083 S1 задача 3: ActorContext вырос на readiness; для тестов диспетчера/хендлеров ниже
   // конкретное значение не важно (они не проверяют place-gate), фиксируем 'ready'.
   readiness: 'ready',
+  // 083 S1, финальная волна ревью ветки (Б-3): ActorContext вырос на tradingState — режим, который
+  // назначает хост (§3.10). Тесты диспетчера ниже его не читают, фиксируем штатный 'normal'.
+  tradingState: 'normal',
   // 083 S1 задача 5: ActorContext вырос на orders/position (pull-модель). Тесты диспетчера ниже
   // не читают ни то ни другое — flat/без открытых заявок достаточно, чтобы типизироваться.
   orders: { open: () => [] },
@@ -261,7 +264,7 @@ function observed<T>(value: T): ObservedValue<T> {
 
 const CANDLE_CLOSED: ActorInputEvent = {
   kind: 'market.candle.closed',
-  candle: observed({ ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }),
+  candle: observed({ open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }),
 };
 
 const PLACE: ActorCommand = {
@@ -660,6 +663,7 @@ test('defineActor: диспетчер покрывает ровно замкну
     onOrderExpired: (e) => void handled.push(e.kind),
     onFill: (e) => void handled.push(e.kind),
     onTimer: (e) => void handled.push(e.kind),
+    onTradingStateChanged: (e) => void handled.push(e.kind),
     onEvent: () => assert.fail('catch-all не должен вызываться: все виды имеют свой хендлер'),
   });
   for (const kind of ACTOR_INPUT_EVENT_KINDS) actor.onEvent(eventOf(kind), CTX_STUB);
@@ -749,13 +753,13 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
     case 'market.candle.closed':
       return CANDLE_CLOSED;
     case 'market.open_interest.observed':
-      return { kind, oi: observed<OiPoint>({ ts: 1, oiTotalUsd: 1_000 }) };
+      return { kind, oi: observed<OpenInterestValue>({ oiTotalUsd: 1_000 }) };
     case 'market.liquidations.bucket_closed':
-      return { kind, liq: observed<LiqPoint>({ ts: 1, longUsd: 0, shortUsd: 0 }) };
+      return { kind, liq: observed<LiquidationsValue>({ longUsd: 0, shortUsd: 0 }) };
     case 'market.taker_volume.bucket_closed':
-      return { kind, taker: observed<TakerReading>({ state: 'missing' }) };
+      return { kind, taker: observed<TakerVolumeValue>({ buyUsd: 0, sellUsd: 0 }) };
     case 'market.funding.observed':
-      return { kind, funding: observed<FundingReading>({ state: 'missing' }) };
+      return { kind, funding: observed<FundingValue>({ fundingRate: 0.0001 }) };
     case 'market.subscription.status_changed':
       return { kind, status: { state: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) } };
     case 'order.accepted':
@@ -774,5 +778,7 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
       return { kind, ts: timestampUs(1), clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true };
     case 'timer':
       return { kind, ts: timestampUs(1), timerId: 't-1' };
+    case 'trading_state.changed':
+      return { kind, ts: timestampUs(1), previous: 'normal', state: 'reducing' };
   }
 }

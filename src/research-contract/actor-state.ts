@@ -30,7 +30,13 @@
 // а не про то, доверяет ли она форме данных, которые ей передали через недоверенную JSON-границу.
 
 import { isTimestampUs, type TimestampUs } from './time-us.js';
-import { hasOnlyPlainOwnKeys, type OrderSide, type PositionView } from './event-driven.js';
+import type { OrderSide, PositionView } from './event-driven.js';
+import {
+  hasOnlyPlainArrayKeys,
+  hasOnlyPlainOwnKeys,
+  isPlainObjectPrototype,
+  safeStringify,
+} from './plain-data.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ЗАПРЕТ: контракт не заводит поля вида `tp1Done`/`tp2Done`/`breakEvenArmed` (требование 5).
@@ -151,12 +157,13 @@ function hasExactOwnKeys(value: object, allowed: readonly string[]): boolean {
 }
 
 /**
- * Прототип и «чистота» собственных ключей — ПЕРЕИСПОЛЬЗУЕТ `hasOnlyPlainOwnKeys` (`event-driven.
- * ts`, экспортирована именно ради этого раунда 4) буквально, а не собственную копию (ревью раунда
- * 4, Important): doc `hasExactOwnKeys` выше заявляла «два гейта одной границы обязаны быть
- * одинаково строги», но раунд 3 закрыл только ЛИШНИЕ ключи — прогон ревью нашёл ТРИ пробела,
- * которые `hasExactOwnKeys` (проверяет только МНОЖЕСТВО имён) структурно не может закрыть: класс-
- * инстанс верной формы (прототип не проверялся вовсе), `qty` через `get`-accessor, неперечислимое
+ * Прототип и «чистота» собственных ключей — ПЕРЕИСПОЛЬЗУЕТ `isPlainObjectPrototype`/
+ * `hasOnlyPlainOwnKeys` (`plain-data.ts`; до финальной волны ревью обе жили в `event-driven.ts`)
+ * буквально, а не собственную копию (ревью раунда 4, Important): doc `hasExactOwnKeys` выше
+ * заявляла «два гейта одной границы обязаны быть одинаково строги», но раунд 3 закрыл только
+ * ЛИШНИЕ ключи — прогон ревью нашёл ТРИ пробела, которые `hasExactOwnKeys` (проверяет только
+ * МНОЖЕСТВО имён) структурно не может закрыть: класс-инстанс верной формы (прототип не проверялся
+ * вовсе), `qty` через `get`-accessor, неперечислимое
  * поле — все три давали `true` здесь и `false` в `isPlainActorState`. Accessor — настоящий TOCTOU:
  * этот гейт читает поле ОДИН раз при валидации, `foldFill` (`actor-state.ts`) — ВТОРОЙ при
  * свёртке, и `get` между ними может вернуть другое значение (провалидирован `buy`, в
@@ -166,8 +173,7 @@ function hasExactOwnKeys(value: object, allowed: readonly string[]): boolean {
  * заявлено, а не текущая брешь именно там, где документирована модель угрозы.
  */
 function isPlainRecordShape(value: object): boolean {
-  const proto = Object.getPrototypeOf(value);
-  return (proto === Object.prototype || proto === null) && hasOnlyPlainOwnKeys(value);
+  return isPlainObjectPrototype(value) && hasOnlyPlainOwnKeys(value);
 }
 
 const FILL_ENTRY_KEYS = ['kind', 'ts', 'clientOrderId', 'side', 'price', 'qty', 'fee', 'last'] as const;
@@ -236,9 +242,20 @@ type _AssertExecutionLedgerEntryKindsCovered = AssertNoUncoveredEntryKind<
   Exclude<ExecutionLedgerEntry['kind'], 'fill' | 'funding_settlement'>
 >;
 
-/** Рантайм-проверка ВСЕГО ledger'а — массив, каждый элемент которого проходит `isExecutionLedgerEntry`. */
+/**
+ * Рантайм-проверка ВСЕГО ledger'а — плотный массив канонической формы, каждый элемент которого
+ * проходит `isExecutionLedgerEntry`.
+ *
+ * `hasOnlyPlainArrayKeys` (`plain-data.ts`) — УРОВЕНЬ МАССИВА, добавлен финальной волной ревью
+ * (F-2). Паритет гейтов, который раунд 4 задачи 5 навёл на уровне ЗАПИСИ, на уровне КОНТЕЙНЕРА
+ * отсутствовал: прогон подтвердил, что `[fill, , fill]` (разреженный), массив с accessor-индексом и
+ * массив с лишним свойством все трое давали здесь `true`, тогда как `isPlainActorState` их
+ * отклоняет, а `derivePositionView` на разреженном честно бросал `RangeError` — то есть предикат
+ * ОБЕЩАЛ то, чего единственный потребитель того же значения не выдерживал. Та же функция, что
+ * закрывает эту дыру у state-слота, закрывает её и здесь — не вторая копия проверки.
+ */
 export function isExecutionLedger(value: unknown): value is ExecutionLedger {
-  return Array.isArray(value) && value.every(isExecutionLedgerEntry);
+  return Array.isArray(value) && hasOnlyPlainArrayKeys(value) && value.every(isExecutionLedgerEntry);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -438,7 +455,11 @@ export function derivePositionView(ledger: ExecutionLedger): PositionView | unde
   let lastTs: TimestampUs | undefined;
   for (const entry of ledger) {
     if (!isExecutionLedgerEntry(entry)) {
-      throw new RangeError(`derivePositionView: недопустимая запись execution ledger'а: ${JSON.stringify(entry)}`);
+      // `safeStringify`, а НЕ `JSON.stringify` (финальная волна ревью, F-6): прямой `JSON.stringify`
+      // в тексте сообщения сам бросал `TypeError` на циклической записи и на `bigint` в поле — то
+      // есть на самых испорченных входах вызывающий получал не документированный здесь `RangeError`,
+      // а чужую ошибку из чужого места, без единого слова о том, какая запись виновата.
+      throw new RangeError(`derivePositionView: недопустимая запись execution ledger'а: ${safeStringify(entry)}`);
     }
     if (lastTs !== undefined && entry.ts < lastTs) {
       throw new RangeError(

@@ -15,8 +15,13 @@
 //      per-dispatch и кумулятивная per-frontier ЕСТЬ, per-session — НЕТ (типовой тест на
 //      отсутствие через excess-property-check);
 //   6) дом RNG — `ActorContext.rng: ActorRng`, именованный тип, а не анонимная структура;
-//      ambient-случайность физически недостижима — замыкание-генератор не переживает
-//      `isPlainActorState` на границе авторского состояния;
+//      спрятанный в авторском состоянии генератор НЕЧЕКПОЙНТАБЕЛЕН — замыкание не переживает
+//      `isPlainActorState` на границе состояния. Это НЕ «ambient-случайность физически
+//      недостижима»: формулировка была опровергнута прогоном и сужена в доке `ActorRng`
+//      (задача 6, ревью раунда 1, I-2) — `Math.random()`/`Date.now()` доступны прямо в хендлере,
+//      module-scope замыкание переживает вызовы `onEvent`, и закрытие ЭТОГО класса (статик-гейт
+//      плюс replay-гейт) — обязательство S2, а не форма `sdk`. Шапка приведена в соответствие с
+//      контрактом финальной волной ревью ветки: файл утверждал опровергнутое;
 //   7) `CONTRACT_VERSION`/`SUPPORTED_CONTRACT_VERSIONS` из ДВУХ мест (`contract/constants.ts` —
 //      published root barrel; `research-contract/catalogs.ts` — активная копия, ведущая
 //      валидацию) синхронизированы — иначе `@trdlabs/sdk` и `@trdlabs/sdk/research-contract`
@@ -42,6 +47,7 @@ import {
   MARKET_DATA_KINDS,
   MARKET_KIND_RANK,
   SUPPORTED_CONTRACT_VERSIONS,
+  TRADING_STATES,
   durationUs,
   isPlainActorState,
   platformContractContext,
@@ -55,8 +61,12 @@ import {
   type ActorRng,
   type MarketDataRequirement,
   type ModuleManifest,
+  type TradingState,
 } from '../src/research-contract/index.js';
 import { validate } from '../src/validation/index.js';
+import { createSchemaRegistry } from '../src/validation/schema-registry.js';
+
+const registry = createSchemaRegistry();
 
 const CTX = platformContractContext();
 const check = (manifest: ModuleManifest) => validate({ inputKind: 'module', manifest }, CTX);
@@ -282,8 +292,9 @@ test('ActorBudgets: per-session бюджета НЕТ в форме (excess-prop
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6) Дом RNG — ActorContext.rng: ActorRng (именованная форма), ambient-случайность физически
-//    недостижима (замыкание-генератор не переживает isPlainActorState).
+// 6) Дом RNG — ActorContext.rng: ActorRng (именованная форма). Гарантия — НЕЧЕКПОЙНТАБЕЛЬНОСТЬ
+//    спрятанного генератора (замыкание не переживает isPlainActorState), а НЕ его физическая
+//    невозможность: см. doc `ActorRng` (event-driven.ts) и шапку этого файла.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('ActorRng — именованная форма, structurally совместима с {next: () => number}', () => {
@@ -294,9 +305,10 @@ test('ActorRng — именованная форма, structurally совмес�
 
 test('дом RNG: замыкание-генератор, спрятанное в авторском состоянии, отклоняется isPlainActorState', () => {
   // Гипотетическая попытка «своего» RNG в state-слоте — функция (замыкание) в любом месте
-  // структуры уже отклонена isPlainActorState (задача 5), что и есть структурная сторона
-  // требования «ambient-случайности у актора нет физически» (doc ActorRng, event-driven.ts):
-  // такое состояние никогда не пройдёт rантайм-гейт на границе чекпойнта.
+  // структуры уже отклонена isPlainActorState (задача 5). Это и есть ровно та гарантия, которую
+  // контракт даёт: спрятанный генератор НЕ СОГЛАСОВАН с чекпойнтом/восстановлением, потому что
+  // не переживает границу состояния. Гарантии «такого генератора не бывает» контракт не даёт —
+  // и это названо явно в doc `ActorRng`.
   let seed = 42;
   const fakeRng = () => {
     seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -340,4 +352,154 @@ test('EVENT_DRIVEN_MIN_CONTRACT_VERSION — валидный член SUPPORTED_
     (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(EVENT_DRIVEN_MIN_CONTRACT_VERSION),
     `EVENT_DRIVEN_MIN_CONTRACT_VERSION="${EVENT_DRIVEN_MIN_CONTRACT_VERSION}" отсутствует в SUPPORTED_CONTRACT_VERSIONS`,
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Б-3 (финальная волна ревью ветки) — TradingState наблюдаем актором, как требует §3.10.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Б-3: TRADING_STATES — замкнутый каталог с двусторонней гарантией', () => {
+  assert.deepEqual([...TRADING_STATES], ['normal', 'reducing', 'halted']);
+  assert.equal(new Set(TRADING_STATES).size, TRADING_STATES.length, 'без дублей');
+
+  // Массив не шире типа — `satisfies` в src; тип не шире массива — `_AssertNoUncoveredTradingState`
+  // там же. Здесь — независимая рантайм-половина: каждый элемент присваивается переменной типа.
+  for (const state of TRADING_STATES) {
+    const typed: TradingState = state;
+    assert.equal(typeof typed, 'string');
+  }
+
+  // @ts-expect-error — каталог замкнут: `paused` не является TradingState.
+  const unknownState: TradingState = 'paused';
+  void unknownState;
+});
+
+test('Б-3: переход режима приезжает СОБЫТИЕМ в замкнутом union и назван в каталоге видов', () => {
+  const occurrences = ACTOR_INPUT_EVENT_KINDS.filter((k) => k === 'trading_state.changed');
+  assert.deepEqual(occurrences, ['trading_state.changed']);
+
+  const event: ActorInputEvent = {
+    kind: 'trading_state.changed',
+    ts: timestampUs(1_700_000_000_000_000),
+    previous: 'normal',
+    state: 'reducing',
+  };
+  assert.equal(event.kind, 'trading_state.changed');
+
+  // Событие несёт ОБА конца перехода: `previous` из ctx невыводим, и без него «вернулись в normal
+  // из halted» неотличимо от «вернулись в normal из reducing».
+  // @ts-expect-error — previous обязателен.
+  const withoutPrevious: ActorInputEvent = {
+    kind: 'trading_state.changed',
+    ts: timestampUs(1),
+    state: 'reducing',
+  };
+  void withoutPrevious;
+
+  // И то же самое на отгружаемой схеме — там типов вызывающего нет вовсе.
+  assert.deepEqual(
+    registry.validateCore('actor-input-event', {
+      kind: 'trading_state.changed',
+      ts: 1_700_000_000_000_000,
+      previous: 'normal',
+      state: 'halted',
+    }),
+    [],
+  );
+  assert.ok(
+    registry.validateCore('actor-input-event', {
+      kind: 'trading_state.changed',
+      ts: 1_700_000_000_000_000,
+      previous: 'normal',
+      state: 'paused',
+    }).length > 0,
+    'схема обязана отвергнуть режим вне каталога',
+  );
+});
+
+test('Б-3: текущий режим читается из ctx — политика не обязана парсить текст order.denied.reason', () => {
+  const ctx: ActorContext = {
+    clock: { nowUs: () => timestampUs(1_700_000_000_000_000) },
+    rng: { next: () => 0.5 },
+    readiness: 'ready',
+    tradingState: 'reducing',
+    orders: { open: () => [] },
+    position: () => undefined,
+  };
+  // Ровно то высказывание, которое до Б-3 было невыразимо: «не наращивай экспозицию, хост в
+  // reducing» — предикат над ЗНАЧЕНИЕМ каталога, а не над свободной строкой причины отказа.
+  const mayGrowExposure = ctx.tradingState === 'normal';
+  assert.equal(mayGrowExposure, false);
+
+  // @ts-expect-error — tradingState обязателен: контекст без режима не типизируется.
+  const withoutState: ActorContext = {
+    clock: { nowUs: () => timestampUs(1) },
+    rng: { next: () => 0.5 },
+    readiness: 'ready',
+    orders: { open: () => [] },
+    position: () => undefined,
+  };
+  void withoutState;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Б-4 (финальная волна ревью ветки) — схема требует ровно того, что обещает дока.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Б-4: схема отвергает дробные и отрицательные µs-метки — не только тип', () => {
+  // Прогон ревью по схемам из dist ДО правки: все пять входов ниже были ВАЛИДНЫ. `TimestampUs` в
+  // схеме был `{"type":"number"}` с докой «целое, неотрицательное, safe-integer», которую
+  // constraint не исполнял; рантайм-конструкторы `timestampUs`/`durationUs` на границе изолята не
+  // участвуют вовсе — там только схема (правило №7).
+  for (const [label, command] of [
+    ['atTs дробный', { kind: 'timer.set', timerId: 't', atTs: 1.5 }],
+    ['atTs отрицательный', { kind: 'timer.set', timerId: 't', atTs: -1000 }],
+    ['afterUs дробный', { kind: 'timer.set', timerId: 't', afterUs: 1.5 }],
+    ['qtyUsd = 0', { kind: 'place', type: 'market', clientOrderId: 'o', side: 'buy', qtyUsd: 0 }],
+    ['qtyUsd отрицательный', { kind: 'place', type: 'market', clientOrderId: 'o', side: 'buy', qtyUsd: -5 }],
+  ] as const) {
+    assert.ok(registry.validateCore('actor-command', command).length > 0, `команда должна отклоняться: ${label}`);
+    assert.ok(registry.validateCore('actor-command-batch', [command]).length > 0, `батч: ${label}`);
+  }
+
+  // Отрицательный `afterUs` законен: `DurationUs` — разность моментов, знак допустим по доке.
+  assert.deepEqual(registry.validateCore('actor-command', { kind: 'timer.set', timerId: 't', afterUs: -60_000 }), []);
+});
+
+test('Б-4: схема отвергает дробный ts, неположительный qty и невалидный revision в событиях', () => {
+  const baseFill = { kind: 'fill', ts: 1_700_000_000_000_000, clientOrderId: 'o', price: 100, fee: 0, last: true };
+  assert.deepEqual(registry.validateCore('actor-input-event', { ...baseFill, qty: 1.5 }), [], 'дробный qty легален');
+
+  for (const [label, event] of [
+    ['ts дробный', { ...baseFill, ts: 1.5, qty: 1 }],
+    ['ts отрицательный', { ...baseFill, ts: -1, qty: 1 }],
+    ['qty = 0', { ...baseFill, qty: 0 }],
+    ['qty отрицательный', { ...baseFill, qty: -5 }],
+    [
+      'revision дробный',
+      {
+        kind: 'market.candle.closed',
+        candle: {
+          effectiveTsUs: 1_700_000_000_000_000,
+          value: { open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+          finality: 'final',
+          revision: -1.5,
+        },
+      },
+    ],
+    [
+      'отрицательный объём свечи',
+      {
+        kind: 'market.candle.closed',
+        candle: {
+          effectiveTsUs: 1_700_000_000_000_000,
+          value: { open: 1, high: 2, low: 0.5, close: 1.5, volume: -10 },
+          finality: 'final',
+          revision: 0,
+        },
+      },
+    ],
+  ] as const) {
+    assert.ok(registry.validateCore('actor-input-event', event).length > 0, `событие должно отклоняться: ${label}`);
+  }
 });

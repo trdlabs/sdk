@@ -15,6 +15,15 @@
 //   3) ни одно рыночное событие не несёт массив свечей — структурно, через excess-property-check
 //      на литерале (`@ts-expect-error`, тот же приём, ради которого существует
 //      `tsconfig.test.json`).
+//
+// Финальная волна ревью ветки добавила ниже два пункта, оба — И типом, И схемой (типовая половина
+// ловит только свежий литерал, схемная работает там, где типов вызывающего нет вовсе):
+//   Б-1) значение события не несёт СВОЕЙ метки времени — единственная координата `effectiveTsUs`
+//        конверта, и в схеме события больше нет легаси-форм `Bar`/`OiPoint`/`LiqPoint`/`TakerPoint`/
+//        `FundingPoint`, каждая из которых несла свой `ts` в миллисекундах;
+//   Б-2) событие несёт ТОЛЬКО present-содержимое — `{state:'missing'|'stale'}` внутри значения
+//        отвергается (раньше было валидным событием), отсутствие выражается единственным каналом
+//        `market.subscription.status_changed`.
 // Run: npx tsx --test test/actor-market-events.test.ts
 // Type-check (обязателен для пункта 1 и 3 — `tsx` их НЕ ловит): npx tsc -p tsconfig.test.json
 import { test } from 'node:test';
@@ -24,8 +33,9 @@ import {
   ACTOR_INPUT_EVENT_KINDS,
   timestampUs,
   type ActorInputEvent,
-  type FundingReading,
-  type LiqPoint,
+  type CandleValue,
+  type FundingValue,
+  type LiquidationsValue,
   type MarketCandleClosedEvent,
   type MarketFundingObservedEvent,
   type MarketLiquidationsBucketClosedEvent,
@@ -33,16 +43,20 @@ import {
   type MarketSubscriptionStatusChangedEvent,
   type MarketTakerVolumeBucketClosedEvent,
   type ObservedValue,
-  type OiPoint,
-  type TakerReading,
+  type OpenInterestValue,
+  type TakerVolumeValue,
 } from '../src/research-contract/index.js';
+import { schemaAsset } from '../src/validation/index.js';
+import { createSchemaRegistry } from '../src/validation/schema-registry.js';
+
+const registry = createSchemaRegistry();
 
 /** Обёртка значения в `ObservedValue<T>` — `final`/`0`, единственная законная комбинация v1. */
 function observed<T>(value: T): ObservedValue<T> {
   return { effectiveTsUs: timestampUs(1_700_000_000_000_000), value, finality: 'final', revision: 0 };
 }
 
-const BAR = { ts: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 };
+const CANDLE: CandleValue = { open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 };
 
 /** Недостижимо, пока `ActorInputEvent['kind']` и вызывающий код согласованы (см. `labelOf`). */
 function assertNever(x: never): never {
@@ -85,6 +99,8 @@ function labelOf(kind: ActorInputEvent['kind']): string {
       return kind;
     case 'timer':
       return kind;
+    case 'trading_state.changed':
+      return kind;
   }
   return assertNever(kind);
 }
@@ -114,6 +130,7 @@ test('ACTOR_INPUT_EVENT_KINDS содержит ровно те виды, что 
     'order.expired',
     'fill',
     'timer',
+    'trading_state.changed',
   ];
   assert.deepEqual([...ACTOR_INPUT_EVENT_KINDS].sort(), [...expected].sort());
   assert.equal(ACTOR_INPUT_EVENT_KINDS.length, expected.length);
@@ -146,37 +163,37 @@ test('рыночные события не несут поле-массив св
 
   const candle: MarketCandleClosedEvent = {
     kind: 'market.candle.closed',
-    candle: observed(BAR),
+    candle: observed(CANDLE),
     // @ts-expect-error — MarketCandleClosedEvent не несёт closedCandles (снесено вместе с ActorBarEvent).
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   const oi: MarketOpenInterestObservedEvent = {
     kind: 'market.open_interest.observed',
-    oi: observed<OiPoint>({ ts: 1, oiTotalUsd: 1 }),
+    oi: observed<OpenInterestValue>({ oiTotalUsd: 1 }),
     // @ts-expect-error — MarketOpenInterestObservedEvent — point observation, окна не бывает.
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   const liq: MarketLiquidationsBucketClosedEvent = {
     kind: 'market.liquidations.bucket_closed',
-    liq: observed<LiqPoint>({ ts: 1, longUsd: 0, shortUsd: 0 }),
+    liq: observed<LiquidationsValue>({ longUsd: 0, shortUsd: 0 }),
     // @ts-expect-error — MarketLiquidationsBucketClosedEvent — один закрытый бакет, не окно.
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   const taker: MarketTakerVolumeBucketClosedEvent = {
     kind: 'market.taker_volume.bucket_closed',
-    taker: observed<TakerReading>({ state: 'missing' }),
+    taker: observed<TakerVolumeValue>({ buyUsd: 0, sellUsd: 0 }),
     // @ts-expect-error — MarketTakerVolumeBucketClosedEvent — один закрытый бакет, не окно.
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   const funding: MarketFundingObservedEvent = {
     kind: 'market.funding.observed',
-    funding: observed<FundingReading>({ state: 'missing' }),
+    funding: observed<FundingValue>({ fundingRate: 0.0001 }),
     // @ts-expect-error — MarketFundingObservedEvent — одно наблюдение, не окно.
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   // Статус подписки — не носитель значения вовсе, но проверяем и его: та же дисциплина.
@@ -184,7 +201,7 @@ test('рыночные события не несут поле-массив св
     kind: 'market.subscription.status_changed',
     status: { state: 'gap', expectedTsUs: timestampUs(1) },
     // @ts-expect-error — MarketSubscriptionStatusChangedEvent не несёт closedCandles.
-    closedCandles: [BAR],
+    closedCandles: [CANDLE],
   };
 
   // Литералы существуют только чтобы их присвоение проверил компилятор; рантайм тут не судья.
@@ -199,17 +216,17 @@ test('рыночные события не несут поле-массив св
 
 test('валидные рыночные литералы (без лишнего поля) типизируются и попадают в ActorInputEvent', () => {
   const events: readonly ActorInputEvent[] = [
-    { kind: 'market.candle.closed', candle: observed(BAR) },
-    { kind: 'market.open_interest.observed', oi: observed<OiPoint>({ ts: 1, oiTotalUsd: 1 }) },
+    { kind: 'market.candle.closed', candle: observed(CANDLE) },
+    { kind: 'market.open_interest.observed', oi: observed<OpenInterestValue>({ oiTotalUsd: 1 }) },
     {
       kind: 'market.liquidations.bucket_closed',
-      liq: observed<LiqPoint>({ ts: 1, longUsd: 0, shortUsd: 0 }),
+      liq: observed<LiquidationsValue>({ longUsd: 0, shortUsd: 0 }),
     },
     {
       kind: 'market.taker_volume.bucket_closed',
-      taker: observed<TakerReading>({ state: 'missing' }),
+      taker: observed<TakerVolumeValue>({ buyUsd: 0, sellUsd: 0 }),
     },
-    { kind: 'market.funding.observed', funding: observed<FundingReading>({ state: 'missing' }) },
+    { kind: 'market.funding.observed', funding: observed<FundingValue>({ fundingRate: -0.0002 }) },
     {
       kind: 'market.subscription.status_changed',
       status: { state: 'gap', expectedTsUs: timestampUs(1) },
@@ -217,4 +234,86 @@ test('валидные рыночные литералы (без лишнего 
   ];
   assert.equal(events.length, 6);
   for (const e of events) assert.equal(typeof e.kind, 'string');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Финальная волна ревью ветки, Б-1: одна временная координата на событие.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Б-1: значение рыночного события не несёт СВОЕЙ метки времени — единственная координата в конверте', () => {
+  // Типовая половина: `ts` на значении — лишнее поле (excess-property-check на СВЕЖЕМ литерале;
+  // на значении, собранном иначе, TS его не ловит — та же оговорка, что у `ActorBudgets`).
+  const candleValue: CandleValue = {
+    open: 1,
+    high: 2,
+    low: 0.5,
+    close: 1.5,
+    volume: 10,
+    // @ts-expect-error — у CandleValue нет `ts`: момент свечи несёт ObservedValue.effectiveTsUs.
+    ts: 1_700_000_000_000,
+  };
+  void candleValue;
+
+  // Схемная половина: то же самое на отгружаемой схеме, где типов вызывающего нет вовсе
+  // (правило №7: гейт, полагающийся на типы вызывающего, гейтом не является).
+  const withLegacyTs = {
+    kind: 'market.candle.closed',
+    candle: {
+      effectiveTsUs: 1_700_000_000_000_000,
+      value: { ts: 1_700_000_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+      finality: 'final',
+      revision: 0,
+    },
+  };
+  assert.ok(
+    registry.validateCore('actor-input-event', withLegacyTs).length > 0,
+    'мс-метка внутри значения обязана отклоняться схемой',
+  );
+
+  // И в самой схеме не осталось легаси-форм значений, несущих `ts` в миллисекундах.
+  const definitions = Object.keys(
+    (schemaAsset('actor-input-event') as { definitions: Record<string, unknown> }).definitions,
+  );
+  for (const legacy of ['Bar', 'OiPoint', 'LiqPoint', 'TakerPoint', 'FundingPoint']) {
+    assert.ok(!definitions.includes(legacy), `схема события всё ещё ссылается на легаси-форму ${legacy}`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Финальная волна ревью ветки, Б-2: событие несёт ТОЛЬКО present-содержимое.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Б-2: «наблюдено, что наблюдения не было» невыразимо — ни типом, ни схемой', () => {
+  // @ts-expect-error — значение taker-события это TakerVolumeValue, а не 3-состоянийный ридинг.
+  const takerMissing: TakerVolumeValue = { state: 'missing' };
+  void takerMissing;
+
+  for (const [label, event] of [
+    [
+      'taker: missing',
+      { kind: 'market.taker_volume.bucket_closed', taker: { effectiveTsUs: 1, value: { state: 'missing' }, finality: 'final', revision: 0 } },
+    ],
+    [
+      'taker: stale',
+      { kind: 'market.taker_volume.bucket_closed', taker: { effectiveTsUs: 1, value: { state: 'stale' }, finality: 'final', revision: 0 } },
+    ],
+    [
+      'funding: missing',
+      { kind: 'market.funding.observed', funding: { effectiveTsUs: 1, value: { state: 'missing' }, finality: 'final', revision: 0 } },
+    ],
+  ] as const) {
+    assert.ok(
+      registry.validateCore('actor-input-event', event).length > 0,
+      `схема обязана отклонять самопротиворечивое событие — ${label}`,
+    );
+  }
+
+  // Отсутствие выражается ЕДИНСТВЕННЫМ каналом — и он валиден.
+  assert.deepEqual(
+    registry.validateCore('actor-input-event', {
+      kind: 'market.subscription.status_changed',
+      status: { state: 'gap', expectedTsUs: 1_700_000_000_000_000 },
+    }),
+    [],
+  );
 });

@@ -22,3 +22,9 @@ export * from './run.js';
 export * from './module.js';
 export * from './market-tape.js';
 export * from './time-us.js';
+// 083 S1, финальная волна ревью ветки: общие предикаты «это plain-data» ТРЁХ границ недоверенного
+// значения (state-слот, запись execution ledger'а, компаратор содержимого ревизии). Все помечены
+// `@internal` — публичной поверхностью контракта не являются; реэкспорт нужен, чтобы
+// `hasOnlyPlainOwnKeys`, уже уехавшая наружу через `export *` из `event-driven.ts`, не исчезла из
+// барреля вместе с переездом в `plain-data.ts`.
+export * from './plain-data.js';

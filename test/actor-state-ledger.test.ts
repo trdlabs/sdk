@@ -21,6 +21,17 @@
 //     `add`/`delete` в `finally`) с явным потолком глубины (fail-closed `false`, не исключение);
 //   - Minor: `-0` теперь отклоняется (не переживает `JSON.stringify`/`JSON.parse` байт-в-байт).
 //
+// ФИНАЛЬНАЯ ВОЛНА РЕВЬЮ ВЕТКИ (2026-08-07) добавила ниже три блока:
+//   - F-1: бюджет РАЗВЁРТКИ (`MAX_ACTOR_STATE_EXPANDED_NODES`), а не только глубины — DAG из 28
+//     объектов разворачивался в ~4·10⁸ узлов JSON и ронял `JSON.stringify`, пока гейт отвечал
+//     `true`. Ожидание прежнего DAG-теста поэтому ПЕРЕВЁРНУТО (`false` вместо `true`), см.
+//     комментарий у самого теста; граница потолка проверена с обеих сторон (18 уровней — да, 19 —
+//     нет) и на плоском состоянии, где разделяемых ссылок нет вовсе;
+//   - F-2: паритет гейтов на УРОВНЕ МАССИВА — `isExecutionLedger` принимал разреженный массив,
+//     accessor-индекс и лишнее свойство контейнера, тогда как `derivePositionView` на них бросал;
+//   - F-6: `derivePositionView` бросал `TypeError` из `JSON.stringify` в тексте сообщения вместо
+//     документированного `RangeError` (циклическая запись, `bigint` в поле).
+//
 // Что здесь пинуется (нумерация — Тесты брифа задачи 5 + правки ревью):
 //   1) `isPlainActorState` отвергает: функцию-значение, замыкание, циклическую ссылку,
 //      несериализуемое значение (NaN/Infinity, Date/Map, symbol/bigint, `-0`), И (I-4) функцию под
@@ -258,15 +269,31 @@ function buildDiamondDag(levels: number): unknown {
   return node;
 }
 
-test('isPlainActorState: DAG с разделяемыми поддеревьями — O(узлы), не O(2^глубина)', () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// F-1 (финальная волна ревью ветки): бюджет РАЗВЁРТКИ, а не только глубины.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Что изменилось в ожиданиях этого теста и почему. Прежняя редакция утверждала `result === true`:
+// раунд 3 вводил memo ради СТОИМОСТИ обхода, а вердикт «DAG легален» считался само собой
+// разумеющимся. Финальное ревью показало, что вердикт был неверен: 21 объект (`DAG(20)`) —
+// `isPlainActorState` = true за <1 мс и `JSON.stringify` = 22 МБ за 263 мс; 28 объектов
+// (`DAG(27)`) — true мгновенно и `JSON.stringify` = `RangeError: Invalid string length` через
+// 28.7 с. Гейт, стоящий на границе персиста, обязан отклонять то, что эту границу не переживёт.
+//
+// Заодно выяснилось, что ЧИСЛО ПУТЕЙ к разделяемому узлу и РАЗМЕР РАЗВЁРТКИ — одна и та же
+// величина: memo экономит ровно те повторные обходы, которые `expandedSize` считает. Поэтому
+// бюджет развёртки поглощает и прежнюю угрозу («2^глубина обходов»): свойство, которое этот тест
+// пинует теперь, — отказ ДЁШЕВЫЙ, то есть гейт не материализует экспоненту, прежде чем её
+// отвергнуть. Регрессия «проверка бюджета переехала за пределы цикла» ломает именно это.
+test('F-1: DAG с экспоненциальной развёрткой отклоняется — и отклоняется ДЁШЕВО', () => {
   // I-3 (задача 6): счётчик Set.add-вызовов вместо миллисекунд, см. doc `countSetAdds` выше —
-  // 50 уровней двоичного ветвления БЕЗ memo дали бы ~2^50 add-вызовов, физически недостижимо ни
-  // за какое время (тот же регрессионный капкан, что раньше держали миллисекунды, — теперь
-  // счётчик, а не таймаут, первым сигнализирует о поломке).
+  // 50 уровней двоичного ветвления с накоплением экспоненты дали бы ~2^50 add-вызовов, физически
+  // недостижимо ни за какое время (тот же регрессионный капкан, что раньше держали миллисекунды, —
+  // теперь счётчик, а не таймаут, первым сигнализирует о поломке).
   const counts: Record<number, number> = {};
   for (const levels of [23, 30, 50]) {
     const { result, setAdds } = countSetAdds(() => isPlainActorState(buildDiamondDag(levels)));
-    assert.equal(result, true, `levels=${levels}`);
+    assert.equal(result, false, `levels=${levels}: развёртка 2^${levels} узлов не переживёт JSON.stringify`);
     counts[levels] = setAdds;
   }
   // Монотонный рост — грубая проверка на промежуточной точке, до основной проверки коэффициентом.
@@ -282,11 +309,37 @@ test('isPlainActorState: DAG с разделяемыми поддеревьям�
       `(23=${counts[23]}, 50=${counts[50]})`,
   );
 });
+
+test('F-1: граница бюджета развёртки измерена, а не угадана — 18 уровней проходят, 19 нет', () => {
+  // `buildDiamondDag(k)` разворачивается в `3·2^k − 1` узлов JSON (лист `{leaf:1}` = 2 узла, каждый
+  // уровень = 1 объект + две копии потомка). При `MAX_ACTOR_STATE_EXPANDED_NODES = 1e6` граница
+  // ложится между `k=18` (786 431 узел) и `k=19` (1 572 863) — оба числа проверены прогоном ниже,
+  // а не выведены на бумаге. Негативный контроль: порог не пересолен в строгую сторону, легальный
+  // DAG в пределах бюджета по-прежнему принимается вместе со всей своей разделяемой структурой.
+  const expandedNodes = (levels: number): number => 3 * 2 ** levels - 1;
+  assert.ok(expandedNodes(18) < 1_000_000, `18 уровней = ${expandedNodes(18)} узлов`);
+  assert.ok(expandedNodes(19) > 1_000_000, `19 уровней = ${expandedNodes(19)} узлов`);
+  assert.equal(isPlainActorState(buildDiamondDag(18)), true, '786 431 узел развёртки — в бюджете');
+  assert.equal(isPlainActorState(buildDiamondDag(19)), false, '1 572 863 узла — за бюджетом');
+  // И бюджет реально соответствует тому, ради чего заведён: то, что гейт принял, сериализуется.
+  assert.ok(JSON.stringify(buildDiamondDag(18))!.length > 0);
+});
+
+test('F-1: плоское состояние в пределах бюджета принимается, за бюджетом — нет', () => {
+  // Бюджет применяется к ЛЮБОЙ форме достижения размера, не только к разделяемым ссылкам: это
+  // названо в doc `MAX_ACTOR_STATE_EXPANDED_NODES` явной ценой решения, и тест держит эту цену
+  // видимой, а не прячет её.
+  const within = { window: Array.from({ length: 500_000 }, (_, i) => i) };
+  const beyond = { window: Array.from({ length: 1_500_000 }, (_, i) => i) };
+  assert.equal(isPlainActorState(within), true, '500 001 узел развёртки — в бюджете');
+  assert.equal(isPlainActorState(beyond), false, '1.5 млн узлов — за бюджетом, даже без разделения ссылок');
+});
 // ─────────────────────────────────────────────────────────────────────────────
 // C-4 (Critical, ревью раунда 4) — РЕГРЕССИЯ раунда 3: memo (`confirmed`) обходил потолок глубины,
 // потому что хранил «доказано» без ГЛУБИНЫ, на которой это доказано. Воспроизведение — не
 // искусственное: append-only цепочка (авторский аудит-лог/история версий) плюс индекс-массив,
-// обычный функциональный паттерн. Починка — `confirmed: Map<object, height>`, проверка
+// обычный функциональный паттерн. Починка — `confirmed: Map<object, {height, expandedSize}>` (поле
+// `expandedSize` добавлено финальной волной ревью, F-1; тогда карта хранила только height), проверка
 // `depth + height <= MAX_ACTOR_STATE_DEPTH` на каждом memo-попадании.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -717,7 +770,8 @@ test('Minor: isExecutionLedgerEntry отвергает лишний ключ —
 // неперечислимое поле, которые проходили здесь и отклонялись isPlainActorState. Accessor даёт
 // настоящий TOCTOU (проверка читает поле один раз, derivePositionView/foldFill — второй): значение
 // может измениться между валидацией и использованием. Починка — isPlainRecordShape переиспользует
-// hasOnlyPlainOwnKeys (event-driven.ts) буквально, не копирует.
+// hasOnlyPlainOwnKeys/isPlainObjectPrototype (с финальной волны ревью — `plain-data.ts`, лист графа
+// зависимостей; до неё обе жили в event-driven.ts) буквально, не копирует.
 test('Important: isExecutionLedgerEntry отвергает class-инстанс, get-accessor и неперечислимое поле — паритет с isPlainActorState', () => {
   class Fill {
     kind = 'fill' as const;
@@ -773,6 +827,76 @@ test('I-5: derivePositionView бросает на недоверенной за�
 
   const unknownKind = [{ kind: 'liquidation', ts: T1, closedQty: 5 }] as unknown as ExecutionLedger;
   assert.throws(() => derivePositionView(unknownKind), RangeError);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-2 (финальная волна ревью ветки): паритет гейтов на УРОВНЕ МАССИВА, не только записи.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('F-2: isExecutionLedger отвергает разреженный массив, accessor-индекс и лишнее свойство контейнера', () => {
+  // Раунд 4 задачи 5 навёл паритет на уровне ЗАПИСИ; уровень КОНТЕЙНЕРА из него выпал. Прогон
+  // финального ревью: все три формы ниже давали здесь `true`, тогда как isPlainActorState их
+  // отклоняет, а derivePositionView на разреженном честно бросает RangeError — предикат обещал то,
+  // чего единственный потребитель того же значения не выдерживает.
+  const good = {
+    kind: 'fill' as const,
+    ts: T1,
+    clientOrderId: 'o',
+    side: 'buy' as const,
+    price: 100,
+    qty: 1,
+    fee: 0,
+    last: true,
+  };
+  assert.equal(isExecutionLedger([good, good]), true, 'плотный массив валидных записей — легален');
+
+  const sparse = [good, , good] as unknown;
+  assert.equal(isExecutionLedger(sparse), false, 'дыра: JSON.stringify превратит её в null');
+  assert.throws(() => derivePositionView(sparse as ExecutionLedger), RangeError, 'потребитель бросает — предикат обязан отказать');
+
+  const withAccessorIndex: unknown[] = [good];
+  Object.defineProperty(withAccessorIndex, 1, { get: () => good, enumerable: true, configurable: true });
+  (withAccessorIndex as { length: number }).length = 2;
+  assert.equal(isExecutionLedger(withAccessorIndex), false, 'accessor-индекс — тот же TOCTOU, что get на поле записи');
+
+  const withExtraProperty = [good] as unknown as Record<string, unknown> & unknown[];
+  withExtraProperty.rogue = () => 1;
+  assert.equal(isExecutionLedger(withExtraProperty), false, 'нечисловое свойство массива не переживёт границу');
+
+  assert.equal(isExecutionLedger('не массив'), false);
+  assert.equal(isExecutionLedger([]), true, 'пустой ledger легален — это просто flat-актор');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-6 (финальная волна ревью ветки): документированный RangeError, а не чужой TypeError.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('F-6: derivePositionView бросает RangeError даже на циклической записи и на bigint', () => {
+  // Прогон финального ревью: обе формы ниже давали `TypeError` ИЗ `JSON.stringify` в тексте
+  // сообщения («Converting circular structure to JSON» / «Do not know how to serialize a BigInt»)
+  // — то есть на самых испорченных входах вызывающий получал не тот класс ошибки, который
+  // документирован у функции, и без единого слова о том, какая запись виновата.
+  const cyclic: Record<string, unknown> = { kind: 'fill' };
+  cyclic.self = cyclic;
+  assert.throws(() => derivePositionView([cyclic] as unknown as ExecutionLedger), RangeError);
+  assert.throws(
+    () => derivePositionView([cyclic] as unknown as ExecutionLedger),
+    /недопустимая запись execution ledger/,
+    'сообщение обязано называть, ЧТО именно отвергнуто',
+  );
+
+  const withBigint = { kind: 'fill', ts: T1, clientOrderId: 'o', side: 'buy', price: 100, qty: 1n, fee: 0, last: true };
+  assert.throws(() => derivePositionView([withBigint] as unknown as ExecutionLedger), RangeError);
+
+  // Сообщение ограничено по длине: диагностика не тащит в текст ошибки мегабайты состояния.
+  const huge = { kind: 'fill', ts: T1, clientOrderId: 'x'.repeat(10_000) };
+  try {
+    derivePositionView([huge] as unknown as ExecutionLedger);
+    assert.fail('ожидался RangeError');
+  } catch (error) {
+    assert.ok(error instanceof RangeError);
+    assert.ok((error as RangeError).message.length < 1_000, `сообщение ${(error as RangeError).message.length} символов`);
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

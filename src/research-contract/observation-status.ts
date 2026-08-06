@@ -28,8 +28,13 @@
 //    не выводится заново на каждый тик из последнего события.
 // 3. Значение — НОЛЬ. Настоящее событие с настоящим значением `0` (или структурой, чьи числовые
 //    поля нулевые) — это `ObservationStatus.observed`, а НЕ gap и не отсутствие. Ликвидации за
-//    минуту без единого каскада — `{longUsd:0, shortUsd:0}` (см. doc `LiqPoint`, `market-tape.ts`),
+//    минуту без единого каскада — `{longUsd:0, shortUsd:0}` (`LiquidationsValue`, `event-driven.ts`
+//    — на событийной поверхности; `LiqPoint`, `market-tape.ts` — в pull-модели `single_position`),
 //    настоящее покрытое наблюдение, не «данных не было».
+//
+// Уровни 1 и 2 — ЕДИНСТВЕННЫЕ каналы отсутствия на поверхности актора (083 S1, финальная волна
+// ревью ветки, Б-2): значение рыночного события несёт только present-содержимое, поэтому
+// «наблюдено, что наблюдения не было» невыразимо ни типом, ни схемой, а не просто не рекомендовано.
 //
 // Смешение уровня 2 и 3 — ИМЕННО тот баг, ради недопущения которого написан этот файл (требование
 // 4 брифа задачи, тест «`?? 0` не компилируется»): в `platform`
@@ -41,6 +46,11 @@
 // размеченный union делает первую ошибку НЕВЫРАЗИМОЙ на уровне типов: `.value` недостижимо без
 // `switch(status.state)` — см. `observation-status.test.ts`, пункт 2.
 
+import {
+  MAX_PLAIN_DATA_DEPTH,
+  hasOnlyPlainArrayKeys,
+  isPlainObjectPrototype,
+} from './plain-data.js';
 import type { TimestampUs } from './time-us.js';
 import type { ValidationCode } from './validation.js';
 
@@ -137,6 +147,13 @@ export interface RevisionTransitionOptions<T> {
    * колонке — самый вероятный вид повреждения потока, и гейт, который путает его с легитимным
    * значением, ничего не гейтит). Передайте свой компаратор для `T`, где нужна другая семантика
    * равенства (например, сравнение с допуском для чисел с плавающей точкой).
+   *
+   * Дефолтный компаратор FAIL-CLOSED: значение, про которое он не может ДОКАЗАТЬ совпадение —
+   * разреженный массив, массив с добавленным нечисловым свойством, экзотический объект
+   * (`Date`/`Map`/класс-инстанс), вложенность глубже `MAX_PLAIN_DATA_DEPTH`, циклическая структура
+   * — считается РАЗНЫМ, то есть даёт `observation_revision_conflict`, а не дубль (финальная волна
+   * ревью ветки, см. doc `deepValueEquals`). Свой компаратор эту дисциплину не наследует — за неё
+   * отвечает тот, кто его передал.
    */
   readonly valueEquals?: (a: T, b: T) => boolean;
 }
@@ -164,25 +181,67 @@ function rejected(code: ValidationCode, reason: string): RevisionTransitionVerdi
  * Объекты/массивы — рекурсивно, по СОБСТВЕННЫМ перечислимым ключам через `Object.keys` (значит,
  * ключ с явным значением `undefined` УЧАСТВУЕТ в сравнении длины набора ключей — `JSON.stringify`
  * такой ключ тихо роняет, из-за чего `{a:1,b:undefined}` и `{a:1}` ошибочно совпадали).
+ *
+ * **Три правки финальной волны ревью ветки — все три про fail-closed и симметрию.**
+ *
+ * 1. **Разреженный массив и лишнее свойство массива** (находка 1). Прежняя версия сравнивала
+ *    массивы через `.every()` по индексам, а `.every()` ПРОПУСКАЕТ дыры: `prev: [1,999,3]` против
+ *    `next: [1, ,3]` давал `duplicate` (индекс 1 не посещён), а обратный порядок аргументов —
+ *    `conflict` (дыра посещена справа как `undefined` против `999`). Гейт коррупции судил «то же
+ *    содержимое» ПО ПОРЯДКУ АРГУМЕНТОВ — воспроизведено прогоном в обе стороны. Теперь оба массива
+ *    обязаны пройти `hasOnlyPlainArrayKeys` (`plain-data.ts`, тот же предикат, которым
+ *    `isPlainActorState` отвергает дыру): что не является плотным каноническим массивом, не
+ *    объявляется «тем же содержимым» ни в каком порядке.
+ * 2. **Экзотические объекты** (находка 1, вторая половина). `Object.keys` у `Date`/`Map`/`Set`/
+ *    класс-инстанса пуст, поэтому ДВА РАЗНЫХ `Date` (0 и +1 сутки) сравнивались как равные —
+ *    воспроизведено. Теперь обе стороны обязаны иметь прототип `Object.prototype`/`null`
+ *    (`isPlainObjectPrototype`, тот же белый список, что у гейта state-слота); всё прочее равно
+ *    только САМО СЕБЕ (случай, который уже поймал `Object.is` первой строкой).
+ * 3. **Потолок глубины** (находка 2). `checkRevisionTransition` на глубоком (`~6000`) и на
+ *    циклическом `value` бросал `RangeError: Maximum call stack size exceeded` — воспроизведено;
+ *    ровно тот класс, за который `isPlainDataValue` получил `MAX_ACTOR_STATE_DEPTH`. Та же
+ *    дисциплина здесь: глубже `MAX_PLAIN_DATA_DEPTH` — `false` (то есть `conflict`, fail-closed),
+ *    а не крах. Цикл ловится этим же потолком: ДВЕ РАЗНЫЕ циклические структуры досчитываются до
+ *    потолка и расходятся, а ОДНА И ТА ЖЕ ссылка отсекается `Object.is` на первой строке на любой
+ *    глубине, поэтому идемпотентный дубль циклического значения остаётся дублем.
+ *
+ * Все три правки сдвигают вердикт только в сторону `conflict` — то есть в сторону отказа. Ложный
+ * конфликт на экзотическом значении предпочтён ложному дублю: этот компаратор — гейт КОРРУПЦИИ, и
+ * «не смог доказать, что содержимое то же» обязано читаться как «не то же».
  */
-function deepValueEquals(a: unknown, b: unknown): boolean {
+function deepValueEquals(a: unknown, b: unknown, depth = 0): boolean {
   if (Object.is(a, b)) return true;
+  if (depth >= MAX_PLAIN_DATA_DEPTH) return false; // fail-closed, не падение стека — см. doc выше.
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
   const aIsArray = Array.isArray(a);
-  const bIsArray = Array.isArray(b);
-  if (aIsArray !== bIsArray) return false;
-  if (aIsArray && bIsArray) {
-    if (a.length !== b.length) return false;
-    return a.every((item, i) => deepValueEquals(item, (b as readonly unknown[])[i]));
+  if (aIsArray !== Array.isArray(b)) return false;
+  if (aIsArray) {
+    const left = a as readonly unknown[];
+    const right = b as readonly unknown[];
+    if (left.length !== right.length) return false;
+    if (!hasOnlyPlainArrayKeys(left) || !hasOnlyPlainArrayKeys(right)) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      if (!deepValueEquals(left[i], right[i], depth + 1)) return false;
+    }
+    return true;
   }
+  if (!isPlainObjectPrototype(a) || !isPlainObjectPrototype(b)) return false;
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every(
-    (key) =>
-      Object.prototype.hasOwnProperty.call(b, key) &&
-      deepValueEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
-  );
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (
+      !deepValueEquals(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+        depth + 1,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Дефолтный компаратор содержимого — см. doc `RevisionTransitionOptions.valueEquals`. */

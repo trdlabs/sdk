@@ -56,7 +56,8 @@
         },
         "qtyUsd": {
           "type": "number",
-          "description": "Запрашиваемый нотионал в USD (до клампа риском)."
+          "description": "Запрашиваемый нотионал в USD (до клампа риском).",
+          "exclusiveMinimum": 0
         },
         "tif": {
           "$ref": "#/definitions/TimeInForce"
@@ -119,7 +120,8 @@
           "$ref": "#/definitions/OrderSide"
         },
         "qtyUsd": {
-          "type": "number"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "price": {
           "type": "number",
@@ -170,7 +172,8 @@
           "$ref": "#/definitions/OrderSide"
         },
         "qtyUsd": {
-          "type": "number"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "stopPrice": {
           "type": "number",
@@ -256,8 +259,9 @@
       "description": "Таймер на абсолютный business_ts."
     },
     "TimestampUs": {
-      "type": "number",
-      "description": "Момент времени в микросекундах эпохи. Целое, неотрицательное, safe-integer."
+      "type": "integer",
+      "description": "Момент времени в микросекундах эпохи. Целое, неотрицательное, safe-integer.",
+      "minimum": 0
     },
     "ActorTimerSetAfterCommand": {
       "type": "object",
@@ -283,7 +287,7 @@
       "description": "Таймер через `afterUs` от `ts` обрабатываемого события."
     },
     "DurationUs": {
-      "type": "number",
+      "type": "integer",
       "description": "Длительность в микросекундах. Целое; знак допустим (разность моментов)."
     },
     "ActorTimerCancelCommand": {

@@ -434,3 +434,98 @@ test('ObservedRevision<T> и ObservedValue<T> взаимно совместим�
   const asObservedRevision: ObservedRevision<number> = { state: 'observed', ...asObservedValue };
   assert.equal(asObservedRevision.value, 9);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Финальная волна ревью ветки — компаратор содержимого: симметрия, белый список, потолок.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Наблюдение с ПРОИЗВОЛЬНЫМ (в т.ч. недоверенным) содержимым — вход из-за JSON-границы. */
+function revOf<T>(value: T, revision = 0): ObservedRevision<T> {
+  return { state: 'observed', value, effectiveTsUs: T1, finality: 'final', revision };
+}
+
+test('находка 1: вердикт компаратора СИММЕТРИЧЕН — разреженный массив не зависит от порядка аргументов', () => {
+  // Прогон финального ревью на прежней версии: `prev:[1,999,3]` против `next:[1,,3]` давал
+  // `duplicate` (`.every` не посещает дыру), обратный порядок — `rejected`. Гейт коррупции судил
+  // «то же содержимое» ПО ПОРЯДКУ АРГУМЕНТОВ. Теперь оба направления обязаны совпасть — и обязаны
+  // быть отказом: дыра не переживает JSON (`JSON.stringify([1,,3]) === '[1,null,3]'`).
+  const dense = [1, 999, 3];
+  const sparse = [1, , 3] as unknown as number[];
+  const forward = checkRevisionTransition(revOf(dense), revOf(sparse));
+  const backward = checkRevisionTransition(revOf(sparse), revOf(dense));
+  assert.equal(forward.outcome, backward.outcome, 'вердикт не должен зависеть от порядка аргументов');
+  assert.equal(forward.outcome, 'rejected');
+  assert.equal((forward as { code: string }).code, 'observation_revision_conflict');
+
+  // Тот же разреженный массив, доставленный ДВАЖДЫ, — тоже отказ (fail-closed), а не мнимый дубль:
+  // компаратор не берётся доказывать равенство того, что границу JSON не переживёт.
+  assert.equal(checkRevisionTransition(revOf(sparse), revOf([1, , 3] as unknown as number[])).outcome, 'rejected');
+
+  // И массив с добавленным нечисловым свойством — тем же отказом, тоже в обе стороны.
+  const withExtra = [1, 2, 3] as unknown as Record<string, unknown> & number[];
+  withExtra.extra = 'x';
+  assert.equal(checkRevisionTransition(revOf([1, 2, 3]), revOf(withExtra)).outcome, 'rejected');
+  assert.equal(checkRevisionTransition(revOf(withExtra), revOf([1, 2, 3])).outcome, 'rejected');
+
+  // Негативный контроль: обычные плотные массивы сравниваются как раньше.
+  assert.equal(checkRevisionTransition(revOf([1, 2, 3]), revOf([1, 2, 3])).outcome, 'duplicate');
+  assert.equal(checkRevisionTransition(revOf([1, 2, 3]), revOf([1, 2, 4])).outcome, 'rejected');
+});
+
+test('находка 1: экзотические объекты не объявляются равными по пустому набору ключей', () => {
+  // Прогон финального ревью: ДВА РАЗНЫХ `Date` (0 и +1 сутки) давали `duplicate` — `Object.keys`
+  // у Date пуст, и сравнение «по собственным перечислимым ключам» находило совпадение там, где
+  // значения различаются на сутки. Белый список прототипов (тот же, что у гейта state-слота).
+  assert.equal(checkRevisionTransition(revOf(new Date(0)), revOf(new Date(86_400_000))).outcome, 'rejected');
+  assert.equal(
+    checkRevisionTransition(revOf(new Map([[1, 2]])), revOf(new Map([[3, 4]]))).outcome,
+    'rejected',
+  );
+
+  // ОДНА И ТА ЖЕ ссылка на экзотический объект — по-прежнему дубль (`Object.is` первой строкой):
+  // повторная доставка одного и того же значения не становится конфликтом из-за его типа.
+  const sameDate = new Date(0);
+  assert.equal(checkRevisionTransition(revOf(sameDate), revOf(sameDate)).outcome, 'duplicate');
+
+  // Штатная форма рыночного значения (plain-объект) продолжает сравниваться по содержимому.
+  assert.equal(
+    checkRevisionTransition(revOf({ longUsd: 0, shortUsd: 0 }), revOf({ longUsd: 0, shortUsd: 0 })).outcome,
+    'duplicate',
+  );
+  assert.equal(
+    checkRevisionTransition(revOf({ longUsd: 0, shortUsd: 0 }), revOf({ longUsd: 1, shortUsd: 0 })).outcome,
+    'rejected',
+  );
+});
+
+test('находка 2: глубокое и циклическое значение дают ВЕРДИКТ, а не RangeError из стека', () => {
+  // Прогон финального ревью на прежней версии: глубина 6000 и 12000, а также две разные
+  // циклические структуры — все три роняли `RangeError: Maximum call stack size exceeded`. Ровно
+  // тот класс, за который `isPlainDataValue` получил потолок глубины; здесь применён тот же
+  // `MAX_PLAIN_DATA_DEPTH`, и исход — отказ (fail-closed), а не крах.
+  type Deep = { next?: Deep };
+  const deep = (n: number): Deep => {
+    let head: Deep = {};
+    for (let i = 0; i < n; i += 1) head = { next: head };
+    return head;
+  };
+  for (const depth of [6_000, 12_000]) {
+    const verdict = checkRevisionTransition(revOf(deep(depth)), revOf(deep(depth)));
+    assert.equal(verdict.outcome, 'rejected', `глубина ${depth}`);
+    assert.equal((verdict as { code: string }).code, 'observation_revision_conflict');
+  }
+
+  const cyclicA: Record<string, unknown> = { a: 1 };
+  cyclicA.self = cyclicA;
+  const cyclicB: Record<string, unknown> = { a: 1 };
+  cyclicB.self = cyclicB;
+  assert.equal(checkRevisionTransition(revOf(cyclicA), revOf(cyclicB)).outcome, 'rejected');
+
+  // ОДНА И ТА ЖЕ циклическая ссылка, доставленная дважды, остаётся идемпотентным дублем:
+  // `Object.is` отсекает её на первой строке, до всякой рекурсии.
+  assert.equal(checkRevisionTransition(revOf(cyclicA), revOf(cyclicA)).outcome, 'duplicate');
+
+  // Негативный контроль: в пределах потолка глубина сравнивается честно.
+  assert.equal(checkRevisionTransition(revOf(deep(100)), revOf(deep(100))).outcome, 'duplicate');
+  assert.equal(checkRevisionTransition(revOf(deep(100)), revOf(deep(101))).outcome, 'rejected');
+});

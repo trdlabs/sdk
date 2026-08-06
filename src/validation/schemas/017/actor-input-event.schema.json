@@ -46,6 +46,9 @@
         },
         {
           "$ref": "#/definitions/ActorTimerEvent"
+        },
+        {
+          "$ref": "#/definitions/ActorTradingStateChangedEvent"
         }
       ],
       "description": "Замкнутый union входных событий актора."
@@ -58,7 +61,7 @@
           "const": "market.candle.closed"
         },
         "candle": {
-          "$ref": "#/definitions/ObservedValue%3CBar%3E"
+          "$ref": "#/definitions/ObservedValue%3CCandleValue%3E"
         }
       },
       "required": [
@@ -66,16 +69,16 @@
         "candle"
       ],
       "additionalProperties": false,
-      "description": "Закрытая (историческая) свеча по своему `subscriptionId`. Значение — `Bar` (017)."
+      "description": "Закрытая (историческая) свеча по своему `subscriptionId`."
     },
-    "ObservedValue<Bar>": {
+    "ObservedValue<CandleValue>": {
       "type": "object",
       "properties": {
         "effectiveTsUs": {
           "$ref": "#/definitions/TimestampUs"
         },
         "value": {
-          "$ref": "#/definitions/Bar"
+          "$ref": "#/definitions/CandleValue"
         },
         "finality": {
           "type": "string",
@@ -85,7 +88,8 @@
           ]
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -98,15 +102,13 @@
       "description": "Наблюдённое значение с собственной временной координатой.\n\n`effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision` ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования, потому что ревизованное значение само либо provisional, либо final.\n\nВ v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму события."
     },
     "TimestampUs": {
-      "type": "number",
-      "description": "Момент времени в микросекундах эпохи. Целое, неотрицательное, safe-integer."
+      "type": "integer",
+      "description": "Момент времени в микросекундах эпохи. Целое, неотрицательное, safe-integer.",
+      "minimum": 0
     },
-    "Bar": {
+    "CandleValue": {
       "type": "object",
       "properties": {
-        "ts": {
-          "type": "number"
-        },
         "open": {
           "type": "number"
         },
@@ -120,11 +122,12 @@
           "type": "number"
         },
         "volume": {
-          "type": "number"
+          "type": "number",
+          "description": "Объём закрытой свечи, `≥ 0`.",
+          "minimum": 0
         }
       },
       "required": [
-        "ts",
         "open",
         "high",
         "low",
@@ -132,7 +135,7 @@
         "volume"
       ],
       "additionalProperties": false,
-      "description": "Закрытая (исторически завершённая) свеча."
+      "description": "Значение свечного события — `Bar` (017) БЕЗ собственного `ts`: момент закрытой свечи несёт `ObservedValue.effectiveTsUs` конверта. Отдельный тип, а НЕ `Omit<Bar, 'ts'>`: `Omit` привязал бы событийную форму к легаси-типу, который живёт своей жизнью (добавление поля в `Bar` для нужд `single_position` молча расширило бы актор-поверхность), и такая связь читалась бы как обещание совместимости, которого нет."
     },
     "MarketOpenInterestObservedEvent": {
       "type": "object",
@@ -142,7 +145,7 @@
           "const": "market.open_interest.observed"
         },
         "oi": {
-          "$ref": "#/definitions/ObservedValue%3COiPoint%3E"
+          "$ref": "#/definitions/ObservedValue%3COpenInterestValue%3E"
         }
       },
       "required": [
@@ -150,16 +153,16 @@
         "oi"
       ],
       "additionalProperties": false,
-      "description": "Open interest — **point observation**: `oi.value` есть УРОВЕНЬ на момент `oi.effectiveTsUs`, а не приращение с прошлого наблюдения (в отличие от liq/taker-бакетов ниже, которые суммируют события ВНУТРИ интервала)."
+      "description": "Open interest — point observation своего `subscriptionId` (см. `OpenInterestValue`)."
     },
-    "ObservedValue<OiPoint>": {
+    "ObservedValue<OpenInterestValue>": {
       "type": "object",
       "properties": {
         "effectiveTsUs": {
           "$ref": "#/definitions/TimestampUs"
         },
         "value": {
-          "$ref": "#/definitions/OiPoint"
+          "$ref": "#/definitions/OpenInterestValue"
         },
         "finality": {
           "type": "string",
@@ -169,7 +172,8 @@
           ]
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -181,22 +185,20 @@
       "additionalProperties": false,
       "description": "Наблюдённое значение с собственной временной координатой.\n\n`effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision` ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования, потому что ревизованное значение само либо provisional, либо final.\n\nВ v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму события."
     },
-    "OiPoint": {
+    "OpenInterestValue": {
       "type": "object",
       "properties": {
-        "ts": {
-          "type": "number"
-        },
         "oiTotalUsd": {
-          "type": "number"
+          "type": "number",
+          "description": "Сырой OI notional в USD, `≥ 0` (маппинг канонической строки 010: `oi_total_usd`).",
+          "minimum": 0
         }
       },
       "required": [
-        "ts",
         "oiTotalUsd"
       ],
       "additionalProperties": false,
-      "description": "Точка OI as-of минуты (read-only)."
+      "description": "Open interest — **point observation**: значение есть УРОВЕНЬ на момент `oi.effectiveTsUs`, а не приращение с прошлого наблюдения (в отличие от liq/taker-бакетов ниже, которые суммируют события ВНУТРИ интервала)."
     },
     "MarketLiquidationsBucketClosedEvent": {
       "type": "object",
@@ -206,7 +208,7 @@
           "const": "market.liquidations.bucket_closed"
         },
         "liq": {
-          "$ref": "#/definitions/ObservedValue%3CLiqPoint%3E"
+          "$ref": "#/definitions/ObservedValue%3CLiquidationsValue%3E"
         }
       },
       "required": [
@@ -214,16 +216,16 @@
         "liq"
       ],
       "additionalProperties": false,
-      "description": "Ликвидации — **interval aggregate** за закрытый бакет своего `subscriptionId`."
+      "description": "Ликвидации — interval aggregate за закрытый бакет своего `subscriptionId`."
     },
-    "ObservedValue<LiqPoint>": {
+    "ObservedValue<LiquidationsValue>": {
       "type": "object",
       "properties": {
         "effectiveTsUs": {
           "$ref": "#/definitions/TimestampUs"
         },
         "value": {
-          "$ref": "#/definitions/LiqPoint"
+          "$ref": "#/definitions/LiquidationsValue"
         },
         "finality": {
           "type": "string",
@@ -233,7 +235,8 @@
           ]
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -245,26 +248,24 @@
       "additionalProperties": false,
       "description": "Наблюдённое значение с собственной временной координатой.\n\n`effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision` ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования, потому что ревизованное значение само либо provisional, либо final.\n\nВ v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму события."
     },
-    "LiqPoint": {
+    "LiquidationsValue": {
       "type": "object",
       "properties": {
-        "ts": {
-          "type": "number"
-        },
         "longUsd": {
-          "type": "number"
+          "type": "number",
+          "minimum": 0
         },
         "shortUsd": {
-          "type": "number"
+          "type": "number",
+          "minimum": 0
         }
       },
       "required": [
-        "ts",
         "longUsd",
         "shortUsd"
       ],
       "additionalProperties": false,
-      "description": "Точка liquidations as-of минуты (read-only). Покрытая-без-событий → {0,0}."
+      "description": "Ликвидации за закрытый бакет — **interval aggregate**. Покрытый бакет без единого каскада несёт `{ longUsd: 0, shortUsd: 0 }` — НАСТОЯЩЕЕ наблюдение со значением ноль, не «данных не было» (см. уровень 3 в шапке `observation-status.ts`)."
     },
     "MarketTakerVolumeBucketClosedEvent": {
       "type": "object",
@@ -274,7 +275,7 @@
           "const": "market.taker_volume.bucket_closed"
         },
         "taker": {
-          "$ref": "#/definitions/ObservedValue%3CTakerReading%3E"
+          "$ref": "#/definitions/ObservedValue%3CTakerVolumeValue%3E"
         }
       },
       "required": [
@@ -282,16 +283,16 @@
         "taker"
       ],
       "additionalProperties": false,
-      "description": "Taker-объём — **interval aggregate** за закрытый минутный бакет своего `subscriptionId`."
+      "description": "Taker-объём — interval aggregate за закрытый минутный бакет своего `subscriptionId`."
     },
-    "ObservedValue<TakerReading>": {
+    "ObservedValue<TakerVolumeValue>": {
       "type": "object",
       "properties": {
         "effectiveTsUs": {
           "$ref": "#/definitions/TimestampUs"
         },
         "value": {
-          "$ref": "#/definitions/TakerReading"
+          "$ref": "#/definitions/TakerVolumeValue"
         },
         "finality": {
           "type": "string",
@@ -301,7 +302,8 @@
           ]
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -313,74 +315,24 @@
       "additionalProperties": false,
       "description": "Наблюдённое значение с собственной временной координатой.\n\n`effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision` ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования, потому что ревизованное значение само либо provisional, либо final.\n\nВ v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму события."
     },
-    "TakerReading": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "present"
-            },
-            "point": {
-              "$ref": "#/definitions/TakerPoint"
-            }
-          },
-          "required": [
-            "state",
-            "point"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "stale"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "missing"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "additionalProperties": false
-        }
-      ],
-      "description": "030 — taker reading за минутный бакет `[t, t+60s)`. **3-state** (`present|stale|missing`); `unsupported` — НЕ reading-состояние. `present` несёт raw `{buyUsd,sellUsd}` (вкл. present-zero `{0,0}`); `stale` — незавершённый бакет (point НЕ несётся, без carry-forward); `missing` — gap (не ноль)."
-    },
-    "TakerPoint": {
+    "TakerVolumeValue": {
       "type": "object",
       "properties": {
-        "ts": {
-          "type": "number"
-        },
         "buyUsd": {
-          "type": "number"
+          "type": "number",
+          "minimum": 0
         },
         "sellUsd": {
-          "type": "number"
+          "type": "number",
+          "minimum": 0
         }
       },
       "required": [
-        "ts",
         "buyUsd",
         "sellUsd"
       ],
       "additionalProperties": false,
-      "description": "030 — точка raw taker flow за минутный бакет (read-only). delta = `buyUsd − sellUsd` (derived)."
+      "description": "Taker-объём за закрытый бакет — **interval aggregate**. Как и у ликвидаций, `{0, 0}` — валидное present-наблюдение. delta (`buyUsd − sellUsd`) и кумулятивный CVD — derive-only, в контракте их нет: производная величина, посчитанная хостом, была бы вторым источником истины для той же пары."
     },
     "MarketFundingObservedEvent": {
       "type": "object",
@@ -390,7 +342,7 @@
           "const": "market.funding.observed"
         },
         "funding": {
-          "$ref": "#/definitions/ObservedValue%3CFundingReading%3E"
+          "$ref": "#/definitions/ObservedValue%3CFundingValue%3E"
         }
       },
       "required": [
@@ -398,16 +350,16 @@
         "funding"
       ],
       "additionalProperties": false,
-      "description": "Funding: rate либо settlement — ОБА варианта используют это же событие с тем же `FundingReading`. Различение — НЕ по значению `{ts, fundingRate}`: периодический rate-тик и settlement-выплата на границе интервала по этой паре структурно неотличимы. Различение объявляется НА ПОДПИСКЕ (`form: 'rate' | 'settlement'`, задача 3 — здесь не опережается); в v1 `settlement` не резолвится вовсе, потому что датасета для него нет. Заводить здесь новый value-тип для funding означало бы проектировать его заново, а задача просит ровно `FundingReading` из `market-tape.js`."
+      "description": "Funding — наблюдение ставки своего `subscriptionId` (см. `FundingValue`)."
     },
-    "ObservedValue<FundingReading>": {
+    "ObservedValue<FundingValue>": {
       "type": "object",
       "properties": {
         "effectiveTsUs": {
           "$ref": "#/definitions/TimestampUs"
         },
         "value": {
-          "$ref": "#/definitions/FundingReading"
+          "$ref": "#/definitions/FundingValue"
         },
         "finality": {
           "type": "string",
@@ -417,7 +369,8 @@
           ]
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -429,74 +382,19 @@
       "additionalProperties": false,
       "description": "Наблюдённое значение с собственной временной координатой.\n\n`effectiveTsUs` — бизнес-минута T, к которой значение относится; `finality` и `revision` ортогональны (§3.11.3): тройка `provisional / final / revised` была ошибкой моделирования, потому что ревизованное значение само либо provisional, либо final.\n\nВ v1 законна ровно одна комбинация — `final` / `0`; resolver отвергает поток с ревизиями fail-closed. Поля входят в форму сразу, чтобы позднее добавление ревизий не ломало форму события."
     },
-    "FundingReading": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "present"
-            },
-            "point": {
-              "$ref": "#/definitions/FundingPoint"
-            }
-          },
-          "required": [
-            "state",
-            "point"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "stale"
-            },
-            "point": {
-              "$ref": "#/definitions/FundingPoint"
-            }
-          },
-          "required": [
-            "state",
-            "point"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "state": {
-              "type": "string",
-              "const": "missing"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "additionalProperties": false
-        }
-      ],
-      "description": "030 — freshness-aware funding reading для текущей закрытой минуты `t`. **3-state** (`present|stale|missing`); `unsupported` — НЕ reading-состояние (выражается через отсутствие метода + coverage). `present`/`stale` несут реальный снимок (`ts ≤ t`); `stale` = bounded live-forward (FR-007), НЕ запрещённый carry-forward. `missing` — нет снимка `ts ≤ t` (не подменяется нулём)."
-    },
-    "FundingPoint": {
+    "FundingValue": {
       "type": "object",
       "properties": {
-        "ts": {
-          "type": "number"
-        },
         "fundingRate": {
-          "type": "number"
+          "type": "number",
+          "description": "Aggregated 8h-equiv ставка (027). `0` и отрицательная — валидные наблюдения, не отсутствие."
         }
       },
       "required": [
-        "ts",
         "fundingRate"
       ],
       "additionalProperties": false,
-      "description": "030 — точка funding as-of минуты (read-only). `ts` реального снимка, `ts ≤ t` (возраст = `t − ts`)."
+      "description": "Funding: rate либо settlement — ОБА варианта используют это же событие с этим же значением. Различение — НЕ по величине: периодический rate-тик и settlement-выплата на границе интервала структурно неотличимы одним числом. Различение объявляется НА ПОДПИСКЕ (`form: 'rate' | 'settlement'`, `FundingMarketDataRequirement` ниже); в v1 `settlement` не резолвится вовсе, потому что колонки для него нет в архиве."
     },
     "MarketSubscriptionStatusChangedEvent": {
       "type": "object",
@@ -697,7 +595,8 @@
         },
         "qty": {
           "type": "number",
-          "description": "Исполненный размер в базовой валюте инструмента."
+          "description": "Исполненный размер в базовой валюте инструмента.",
+          "exclusiveMinimum": 0
         },
         "fee": {
           "type": "number"
@@ -740,6 +639,41 @@
       ],
       "additionalProperties": false,
       "description": "Срабатывание таймера, поставленного командой `timer.set`. Таймерами владеет ХОСТ: у изолята нет часов. В backtest/paper время двигают бары, в live дополнительно wall-clock-тик — business_ts события в обоих случаях из ленты, нового недетерминизма нет."
+    },
+    "ActorTradingStateChangedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "trading_state.changed"
+        },
+        "ts": {
+          "$ref": "#/definitions/TimestampUs"
+        },
+        "previous": {
+          "$ref": "#/definitions/TradingState"
+        },
+        "state": {
+          "$ref": "#/definitions/TradingState"
+        }
+      },
+      "required": [
+        "kind",
+        "ts",
+        "previous",
+        "state"
+      ],
+      "additionalProperties": false,
+      "description": "Переход режима торговли. Эмитится ХОСТОМ на САМОМ переходе — `previous !== state` всегда (режим, не изменившийся на очередном тике watchdog'а, события не порождает: иначе актор получал бы шум на каждом тике вместо сигнала об изменении — та же дисциплина, что у `MarketSubscriptionStatusChangedEvent` выше). Равенство полей типом не запрещено (два одинаковых литерала типизируются) — это инвариант ЭМИТТЕРА, как и «gap-событие ровно один раз».\n\nСобытие несёт ОБА конца перехода, хотя `state` дублирует `ctx.tradingState` к моменту вызова хендлера (инвариант state-before-handler, см. `ActorContext`). Это не то же дублирование, что закрыл Б-1: событие — ЗАПИСЬ О СЛУЧИВШЕМСЯ, `ctx` — снимок ТЕКУЩЕГО; ровно так же устроен `fill` (несёт `price`/`qty`, хотя `ctx.position()` их уже учёл). А `previous` из `ctx` не выводится ВООБЩЕ — без него «вернулись в normal из halted» и «вернулись в normal из reducing» были бы для автора одним и тем же наблюдением.\n\nПоля `reason` НЕТ намеренно: закрытого каталога причин спека не даёт, а свободная строка воспроизвела бы ровно ту дыру, ради закрытия которой это событие заведено (политика, построенная на разборе человеческого текста). Диагностика причины — забота evidence прогона, не актора."
+    },
+    "TradingState": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "reducing",
+        "halted"
+      ],
+      "description": "Режим торговли инстанса, которым распоряжается ХОСТ, а не актор. Спека §3.10: при остановившемся фиде бизнес-время не двигается, protective-таймеры актора честно замирают, и компенсирует это\n**host-watchdog** — он наблюдает staleness источника и переводит `TradingState` в `'reducing'` (растить экспозицию нельзя, отмены и reduce-only проходят) либо `'halted'` (только `cancel`). Watchdog вне детерминированного контура, поэтому Л4 (cross-host parity) он не ломает.\n\n**Почему это S1, а не S5.** Спека §3.10 дословно: «Требование называется в S1 (актор наблюдает переход), реализуется в S5». Без НАЗВАННОГО состояния LLM-автор не может выразить «не наращивай экспозицию, хост в reducing» ничем, кроме парсинга свободного текста `order.denied.reason` — то есть строил бы политику на строке, которую контракт не обязывался держать стабильной. Здесь — ФОРМА (каталог, событие перехода, чтение текущего режима из `ctx`); сам watchdog, его пороги staleness и проводка режима в RiskEngine — долг **S5** (`platform`), названный тем же способом, что остальные долги этого файла (детектор breach бюджетов — S2, прогрев — S2, резолвер подписок — задача 8).\n\n**Регистр значений.** Спека пишет `REDUCING`/`HALTED` капслоком — это прозаическое выделение автомата, а не объявление литералов. В пакете ЕДИНЫЙ регистр закрытых каталогов (`'submitted'`, `'final_only'`, `'single_position'`, `'stop_market'`, `'gtc'`), и ломать его ради типографики прозы значило бы завести две конвенции в одном замороженном словаре."
     }
   },
   "title": "ActorInputEvent"
