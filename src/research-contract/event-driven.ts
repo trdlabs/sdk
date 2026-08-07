@@ -1905,6 +1905,23 @@ export type ActorHandlerResult = readonly ActorCommand[] | ActorCommand | null |
  * своего хендлера (паттерн Nautilus `on_event`). Ни один не объявлен → актор ничего не делает,
  * что валидно (и полезно как заглушка).
  *
+ * **Правило имени ТОТАЛЬНО, исключений нет** (решение владельца, ревью PR sdk#34):
+ * `'on' + kind.split(/[._]/).map(capitalize).join('')`. То есть `order.accepted` →
+ * `onOrderAccepted`, `market.taker_volume.bucket_closed` → `onMarketTakerVolumeBucketClosed`,
+ * `cancel.rejected` → `onCancelRejected`, `timer.fired` → `onTimerFired`, `fill` → `onFill`.
+ *
+ * Тотальность здесь — не эстетика, а страховка от МОЛЧАЛИВОГО отказа. Все хендлеры опциональны, и
+ * необъявленный хендлер — законная форма («вид игнорируется»), поэтому опечатка или память об
+ * исключении дают не ошибку, а тишину: событие уедет в `onEvent`, а если и его нет — в пустой
+ * батч. Ни тип, ни валидатор, ни схема этого не ловят и поймать не могут. Стратегии здесь пишет
+ * LLM, для которой «помнить, что вот этот один вид называется иначе» — ровно тот вид требования,
+ * который она нарушит молча.
+ *
+ * Правило не оставлено на память: `event-driven.test.ts` ВЫВОДИТ ожидаемое имя из каждого элемента
+ * `ACTOR_INPUT_EVENT_KINDS` этой же формулой и требует, чтобы диспетчер его вызвал — новый вид
+ * события без правильно названного хендлера роняет тест, а не тихо теряет событие. Тест проверен
+ * фальсификацией: возврат `onTimerFired` к `onTimer` красит его, значит он не декоративен.
+ *
  * `snapshotState` (ревью раунда 2, I-3, пункт 1, Important): без этого поля `defineActor` не имел
  * НИ ОДНОГО способа произвести `StrategyActor` с `snapshotState` — прогон ревью подтвердил
  * `Reflect.ownKeys(actor) === ['onEvent']` ПРИ ЛЮБЫХ переданных хендлерах, то есть собственный
@@ -1936,13 +1953,33 @@ export type ActorHandlers<S extends ActorStateValue = ActorStateValue> = {
   onOrderDenied?(event: ActorOrderDeniedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderRejected?(event: ActorOrderRejectedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderCanceled?(event: ActorOrderCanceledEvent, ctx: ActorContext): ActorHandlerResult;
-  onOrderCancelRejected?(event: ActorOrderCancelRejectedEvent, ctx: ActorContext): ActorHandlerResult;
+  /**
+   * Переименован из `onOrderCancelRejected` ТОЙ ЖЕ правкой, что `onTimer` → `onTimerFired` (см. doc
+   * ниже за полным доводом). Владелец, назначая правило тотальным, назвал это отображение как
+   * `cancel.rejected` → `onCancelRejected` — а в коде стояло `onOrderCancelRejected`, то есть
+   * правило БЫЛО НЕ ТОТАЛЬНЫМ и после переименования таймера осталось бы ровно одно исключение,
+   * с тем же классом отказа (LLM-автор держит исключение в памяти, промах не ловится ничем).
+   * Имя было заведено по аналогии с Nautilus `on_order_cancel_rejected`; аналогия проиграла
+   * тотальности правила. Released-именем оно не было НИКОГДА: события `cancel.rejected` в
+   * `0.13.0` не существовало вовсе (задача 6 этой же ветки его и завела), поэтому переименование
+   * не стоит потребителям ничего.
+   */
+  onCancelRejected?(event: ActorOrderCancelRejectedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderExpired?(event: ActorOrderExpiredEvent, ctx: ActorContext): ActorHandlerResult;
   onFill?(event: ActorFillEvent, ctx: ActorContext): ActorHandlerResult;
-  /** Имя хендлера — по-прежнему `onTimer` (released в `0.13.0`), хотя вид события переименован в
-   *  `timer.fired`: ревью владельца переименовало СОБЫТИЕ, а не сахар вокруг него, и лишний слом
-   *  released-имени там, где он ничего не чинит, был бы ломающим изменением без причины. */
-  onTimer?(event: ActorTimerFiredEvent, ctx: ActorContext): ActorHandlerResult;
+  /**
+   * Переименован из released-`onTimer` (`0.13.0`) вслед за видом события (решение владельца,
+   * ревью PR sdk#34 — первая редакция этой правки имя сохраняла, довод «лишний слом released-имени
+   * там, где он ничего не чинит» был отклонён).
+   *
+   * Польза не в самом имени, а в ТОТАЛЬНОСТИ правила отображения «вид события → имя хендлера»:
+   * `order.accepted` → `onOrderAccepted`, `trading_state.changed` → `onTradingStateChanged`, значит
+   * `timer.fired` → `onTimerFired`. Оставленный `onTimer` был бы исключением из ОДНОГО элемента, а
+   * стратегии здесь пишет LLM: исключение придётся держать в памяти, и промах по нему не ловится
+   * НИЧЕМ — ни типом (все хендлеры опциональны), ни валидатором; хендлер просто не позовут, молча.
+   * Ветка ломающая по построению, одним переименованием её характер не меняется.
+   */
+  onTimerFired?(event: ActorTimerFiredEvent, ctx: ActorContext): ActorHandlerResult;
   onTradingStateChanged?(
     event: ActorTradingStateChangedEvent,
     ctx: ActorContext,
@@ -2037,7 +2074,7 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
         if (handlers.onOrderCanceled) return toBatch(handlers.onOrderCanceled(event, ctx));
         break;
       case 'cancel.rejected':
-        if (handlers.onOrderCancelRejected) return toBatch(handlers.onOrderCancelRejected(event, ctx));
+        if (handlers.onCancelRejected) return toBatch(handlers.onCancelRejected(event, ctx));
         break;
       case 'order.expired':
         if (handlers.onOrderExpired) return toBatch(handlers.onOrderExpired(event, ctx));
@@ -2046,7 +2083,7 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
         if (handlers.onFill) return toBatch(handlers.onFill(event, ctx));
         break;
       case 'timer.fired':
-        if (handlers.onTimer) return toBatch(handlers.onTimer(event, ctx));
+        if (handlers.onTimerFired) return toBatch(handlers.onTimerFired(event, ctx));
         break;
       case 'trading_state.changed':
         if (handlers.onTradingStateChanged) return toBatch(handlers.onTradingStateChanged(event, ctx));

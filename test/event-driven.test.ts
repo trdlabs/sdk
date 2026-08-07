@@ -25,6 +25,7 @@ import {
   timestampUs,
   type ActorCommand,
   type ActorContext,
+  type ActorHandlers,
   type ActorInit,
   type ActorInputEvent,
   type ActorStateValue,
@@ -659,10 +660,10 @@ test('defineActor: диспетчер покрывает ровно замкну
     onOrderDenied: (e) => void handled.push(e.kind),
     onOrderRejected: (e) => void handled.push(e.kind),
     onOrderCanceled: (e) => void handled.push(e.kind),
-    onOrderCancelRejected: (e) => void handled.push(e.kind),
+    onCancelRejected: (e) => void handled.push(e.kind),
     onOrderExpired: (e) => void handled.push(e.kind),
     onFill: (e) => void handled.push(e.kind),
-    onTimer: (e) => void handled.push(e.kind),
+    onTimerFired: (e) => void handled.push(e.kind),
     onTradingStateChanged: (e) => void handled.push(e.kind),
     onEvent: () => assert.fail('catch-all не должен вызываться: все виды имеют свой хендлер'),
   });
@@ -676,6 +677,39 @@ test('defineActor: неизвестный вид события — отказ, 
     () => actor.onEvent({ kind: 'order.filled' } as unknown as ActorInputEvent, CTX_STUB),
     /неизвестный вид события/,
   );
+});
+
+// Решение владельца (ревью PR sdk#34): правило «вид события → имя хендлера» ТОТАЛЬНО. Пинуется
+// ФОРМУЛОЙ, а не списком: список пришлось бы держать согласованным руками — ровно та работа, от
+// которой правило избавляет. Тест обязателен именно здесь, потому что промах по имени НЕ ловится
+// ничем в рантайме: все хендлеры опциональны, необъявленный — законная форма «вид игнорируется»,
+// так что неправильно названный хендлер даёт не ошибку, а тишину (событие уедет в catch-all
+// `onEvent`, а без него — в пустой батч). Тест ловил бы и `onTimer` при `timer.fired`, и
+// `onOrderCancelRejected` при `cancel.rejected` — оба исключения, снятые этой правкой.
+test('defineActor: имя хендлера ВЫВОДИТСЯ из вида события — тотально, без исключений', () => {
+  const handlerNameOf = (kind: string): string =>
+    'on' +
+    kind
+      .split(/[._]/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join('');
+
+  // Самопроверка формулы на двух заведомо известных концах: без неё сломанная формула совпадала бы
+  // сама с собой, и тест был бы зелёным, не проверяя ничего.
+  assert.equal(handlerNameOf('fill'), 'onFill');
+  assert.equal(handlerNameOf('market.taker_volume.bucket_closed'), 'onMarketTakerVolumeBucketClosed');
+
+  for (const kind of ACTOR_INPUT_EVENT_KINDS) {
+    const expected = handlerNameOf(kind);
+    const called: string[] = [];
+    const actor = defineActor({
+      [expected]: () => void called.push(kind),
+      onEvent: () => assert.fail(`вид ${kind}: диспетчер не нашёл хендлер по имени ${expected}`),
+    } as ActorHandlers);
+
+    actor.onEvent(eventOf(kind), CTX_STUB);
+    assert.deepEqual(called, [kind], `вид ${kind} обязан попасть в ${expected}`);
+  }
 });
 
 // --- схемы конверта изолята ---

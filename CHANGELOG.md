@@ -93,8 +93,8 @@ note under Changed for why `017.3`, which originally introduced that surface, no
   dueTsUs }`) under Added — the normative spec §3.8.5 names the event `timer.fired` (`timer` appears
   only in §3.1, an inconsistency of the spec itself, resolved in favour of the normative section)
   and requires the firing envelope to carry `eventTsUs = U` with the original deadline stored
-  separately as `dueTsUs`. The `defineActor` handler keeps its released name `onTimer`; only the
-  event and its kind are renamed.
+  separately as `dueTsUs`. The `defineActor` handler is renamed with it, `onTimer` → `onTimerFired`
+  — see the handler-naming entry under Changed for why the naming rule is kept total.
 
 ### Added (083 S1, tasks 1–6)
 
@@ -238,6 +238,19 @@ note under Changed for why `017.3`, which originally introduced that surface, no
   that a forgotten `* 1000` stops being executable code. `ActorTimerSetAfterCommand.afterUs` is now
   documented as an offset from the *envelope's* `eventTsUs`, since events no longer have a `ts` to
   offset from.
+- `research-contract`: **the `defineActor` handler-name rule is now total, and two handlers were
+  renamed to make it so** — `onTimer` → `onTimerFired` (`timer.fired`) and `onOrderCancelRejected` →
+  `onCancelRejected` (`cancel.rejected`). The rule is
+  `'on' + kind.split(/[._]/).map(capitalize).join('')` for every kind, with no exceptions:
+  `order.accepted` → `onOrderAccepted`, `market.taker_volume.bucket_closed` →
+  `onMarketTakerVolumeBucketClosed`, `fill` → `onFill`. Totality is a safety property, not a style
+  preference: every handler is optional and an undeclared one is a legal way to say "ignore this
+  kind", so a misremembered name produces **silence** — the event falls through to the catch-all
+  `onEvent`, or to an empty batch — and neither the type checker, the validator nor the schema can
+  catch it. `onTimer` was released in `0.13.0` and this rename does break it; `onOrderCancelRejected`
+  never shipped (`cancel.rejected` is new in this release), so that one costs consumers nothing. A
+  test now derives the expected name from each member of `ACTOR_INPUT_EVENT_KINDS` and asserts the
+  dispatcher calls it, so the rule is enforced rather than remembered.
 - `research-contract`: **every actor input event lost its own time field.** The five market events'
   payloads went first, to `ts`-free value types (see Added) — until they did, "no millisecond field
   is left on the actor surface" was not yet true. The nine execution-side events
@@ -273,9 +286,15 @@ note under Changed for why `017.3`, which originally introduced that surface, no
 
 No consumer imports the six removed exports from `@trdlabs/sdk` today — verified by an import sweep
 across all eight ecosystem repos (per-symbol output attached to the PR). **`MarketDataKind` is the
-exception**: `backtester` re-exports it through `@trading/research-contracts` and will fail to build
-against the new meaning — see the warning block at the top of this entry for the exact file and
-line, and switch that consumer to `LegacyMarketDataKind`. Authoring
+exception**, and it needs a fix in `backtester` in exactly two places:
+`packages/research-contracts/src/research/market-tape.ts` (the verbatim
+`export type { …, MarketDataKind, … } from '@trdlabs/sdk/research-contract'` — re-export
+`LegacyMarketDataKind` instead, or stop re-exporting the name) and
+`apps/backtester/src/engine/market-tape.ts:98` (the use site,
+`const COVERAGE_KIND_ORDER: readonly MarketDataKind[] = ['openInterest', 'liquidations', 'funding',
+'taker']` — retype it to `LegacyMarketDataKind`). This release ships first and that consumer is
+fixed in a follow-up PR, deliberately: the break is a type error at build time, not a silent
+behaviour change. Authoring
 (or generating) an `event_driven` module against the `0.13.0` shapes does need to move: bump
 `contractVersion` to `017.4`; construct every actor-surface timestamp with `timestampUs()`/
 `durationUs()` instead of a raw millisecond number; rename `afterMs` to `afterUs`; drop the `ts`
@@ -283,7 +302,10 @@ field from **every** event — market payloads read their instant from `Observed
 execution events read theirs from `ActorEnvelope.eventTsUs` (and stop expecting
 `{state:'missing'|'stale'}` inside a market event — subscribe to
 `market.subscription.status_changed` for that); rename the `timer` event to `timer.fired` and read
-`dueTsUs` (the deadline) rather than a firing timestamp — `onTimer` keeps its name; and read
+`dueTsUs` (the deadline) rather than a firing timestamp; rename the handlers `onTimer` →
+`onTimerFired` and `onOrderCancelRejected` → `onCancelRejected` (**a missed handler rename is
+silent** — the event falls through to `onEvent` or to nothing; see the handler-naming entry under
+Changed); and read
 `OpenOrderView`/`PositionView` against their redesigned shape (see Added above), not the `0.13.0`
 one — there is no compatibility shim between the two. Nothing here executes yet: this release
 changes no runtime in any repo — the dispatcher, budgets and warm-up are S2 (`@trdlabs/engine`),
