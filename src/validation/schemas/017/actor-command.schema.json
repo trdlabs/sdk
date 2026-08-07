@@ -275,7 +275,7 @@
         },
         "afterUs": {
           "$ref": "#/definitions/DurationUs",
-          "description": "Смещение от `ts` события, породившего команду."
+          "description": "Смещение от `ActorEnvelope.eventTsUs` события, породившего команду, — то есть от frontier `T` его доставки (было «от `ts` события», пока у событий был собственный `ts`; Б-5 его снёс, и единственная база отсчёта теперь одна — конверт). Срок `dueTs = eventTsUs + afterUs` материализуется по правилу §3.8.5, см. `ActorTimerFiredEvent`."
         }
       },
       "required": [
@@ -284,7 +284,7 @@
         "afterUs"
       ],
       "additionalProperties": false,
-      "description": "Таймер через `afterUs` от `ts` обрабатываемого события."
+      "description": "Таймер через `afterUs` от `eventTsUs` обрабатываемого события."
     },
     "DurationUs": {
       "type": "integer",

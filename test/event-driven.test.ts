@@ -484,7 +484,7 @@ test('Новый дефект раунда 3: defineActor сохраняет `th
     },
   };
   const actor = defineActor(handlers);
-  actor.onEvent({ kind: 'fill', ts: timestampUs(1), clientOrderId: 'o-1', price: 1, qty: 1, fee: 0, last: true }, CTX_STUB);
+  actor.onEvent({ kind: 'fill', clientOrderId: 'o-1', price: 1, qty: 1, fee: 0, last: true }, CTX_STUB);
   assert.doesNotThrow(() => actor.snapshotState?.(), 'this внутри snapshotState обязан указывать на handlers');
   assert.deepEqual(actor.snapshotState?.(), { count: 1 });
 });
@@ -673,7 +673,7 @@ test('defineActor: диспетчер покрывает ровно замкну
 test('defineActor: неизвестный вид события — отказ, а не молчаливое игнорирование', () => {
   const actor = defineActor({ onEvent: () => [] });
   assert.throws(
-    () => actor.onEvent({ kind: 'order.filled', ts: 1 } as unknown as ActorInputEvent, CTX_STUB),
+    () => actor.onEvent({ kind: 'order.filled' } as unknown as ActorInputEvent, CTX_STUB),
     /неизвестный вид события/,
   );
 });
@@ -763,22 +763,22 @@ function eventOf(kind: (typeof ACTOR_INPUT_EVENT_KINDS)[number]): ActorInputEven
     case 'market.subscription.status_changed':
       return { kind, status: { state: 'gap', expectedTsUs: timestampUs(1_700_000_000_000_000) } };
     case 'order.accepted':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
+      return { kind, clientOrderId: 'o-1' };
     case 'order.denied':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'max_notional' };
+      return { kind, clientOrderId: 'o-1', reason: 'max_notional' };
     case 'order.rejected':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'venue' };
+      return { kind, clientOrderId: 'o-1', reason: 'venue' };
     case 'order.canceled':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
+      return { kind, clientOrderId: 'o-1' };
     case 'cancel.rejected':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', reason: 'already_filled' };
+      return { kind, clientOrderId: 'o-1', reason: 'already_filled' };
     case 'order.expired':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1' };
+      return { kind, clientOrderId: 'o-1' };
     case 'fill':
-      return { kind, ts: timestampUs(1), clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true };
-    case 'timer':
-      return { kind, ts: timestampUs(1), timerId: 't-1' };
+      return { kind, clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true };
+    case 'timer.fired':
+      return { kind, timerId: 't-1', dueTsUs: timestampUs(1) };
     case 'trading_state.changed':
-      return { kind, ts: timestampUs(1), previous: 'normal', state: 'reducing' };
+      return { kind, previous: 'normal', state: 'reducing' };
   }
 }

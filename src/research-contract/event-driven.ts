@@ -1,10 +1,24 @@
 // 083 E1 — kernel-контракт формы `event_driven`: стратегия как stateful-актор над order-flow.
 //
-// Эскиз и обоснование: platform `specs/083-event-driven-runtime-spike/research.md` §3 D1.
-// Ранний старт E1 разрешён карточкой `shared-execution-engine` (раздел Ф6, exception 2026-07-23):
-// изменение ЧИСТО АДДИТИВНОЕ, рантаймов не трогает, все существующие бандлы остаются валидны с
-// дефолтным `single_position`. E2–E7 (граница изолята, движок, RiskEngine, event-spine) — за
-// триггером возврата эпика; здесь только СЛОВАРЬ, чтобы lab мог готовить авторство заранее.
+// Эскиз и обоснование: platform `specs/083-event-driven-runtime-spike/research.md` §3 D1;
+// нормативная форма — спека control-center `docs/superpowers/specs/
+// 2026-08-04-event-driven-actor-contract-design.md` §3.
+//
+// **Состояние эпика — НЕ «ранний старт за триггером возврата»** (ревью владельца на PR sdk#34:
+// шапка ссылалась на снятый триггер). Исходный E1 действительно приехал под early-start exception
+// карточки `shared-execution-engine` (раздел Ф6, 2026-07-23), когда E2–E7 стояли за триггером
+// возврата эпика, и был опубликован как `@trdlabs/sdk@0.13.0`. **Триггер снят решением владельца
+// 2026-08-06 и распространён на Ф6** (cc#297, довод «сначала движок» к Ф6 применим сильнее, потому
+// что Ф6 и есть движок): Ф6 разблокирована целиком, а ЭТОТ файл переписан этапом S1 той же
+// декомпозиции. Вместе с триггером устарела и оговорка «изменение ЧИСТО АДДИТИВНОЕ»: S1 переписал
+// surface формы `event_driven` ЦЕЛИКОМ и снёс released-экспорты (см. doc
+// `EVENT_DRIVEN_MIN_CONTRACT_VERSION` ниже и блок у `OrderSide`). Аддитивным осталось ровно одно —
+// форма `single_position` не тронута, манифест без поля `lifecycle` валиден как был.
+//
+// E2–E7 (граница изолята, движок, RiskEngine, event-spine) — не «за триггером», а следующие этапы
+// той же декомпозиции: S2 (`@trdlabs/engine` — диспетчер, бюджеты, прогрев), S3 (`backtester`),
+// S5 (`platform` — host-watchdog и проводка `TradingState`). Здесь по-прежнему только СЛОВАРЬ:
+// рантаймов этот пакет не трогает.
 //
 // Две формы стратегии, не одна с флагом:
 // - `single_position` — чистая decision-функция над flat-snapshot; lifecycle позиции держит хост
@@ -415,17 +429,26 @@ export interface MarketSubscriptionStatusChangedEvent {
 // рантайма (диспетчер уже переключает по `kind` через `switch`+`assertNever`, новый `case` —
 // локальное изменение). Форм этих событий эта задача не проектирует.
 
-// `ts` в КАЖДОМ событии ниже — `TimestampUs`, НЕ `number` (было так до раунда правок 1, I-7):
-// рыночные события и статус уже µs, а order.*/fill/timer оставались в мс — ровно то сосуществование
-// двух единиц, ради защиты от которого §3.2 вводит бранд-типы (забытый `* 1000` перестаёт быть
-// исполняемым кодом только когда ВСЯ поверхность актора в одной единице — что стало правдой лишь в
-// финальной волне ревью ветки: до неё значения пяти рыночных событий несли мс-метку легаси-типов,
-// см. блок «Значения рыночных событий» выше).
+// **Ни одно событие ниже НЕ несёт собственной временной координаты** (ревью владельца на PR sdk#34,
+// Б-5). До этой правки каждое из девяти исполнительных событий несло поле `ts: TimestampUs` — то же
+// самое дублирование, которое финальная волна ревью закрыла у ПЯТИ РЫНОЧНЫХ событий (Б-1, см. блок
+// «Значения рыночных событий» выше) и которое та же волна ЗАВЕЛА ЗАНОВО на `trading_state.changed`,
+// добавляя его. Довод дословно тот же: событие ПРОИСХОДИТ в том frontier, в котором доставлено,
+// значит единственная его временная координата — `ActorEnvelope.eventTsUs`, а вторая метка на
+// payload'е либо повторяет её (шум и второй источник истины), либо расходится с ней (и тогда
+// непонятно, какая из двух — правда).
+//
+// Единица тут ни при чём: поля были уже µs-брандами (раунд правок 1, I-7 перевёл их из мс), и
+// правка Б-5 не про единицы, а про ЧИСЛО координат. Ровно поэтому мс-заявка предыдущей волны
+// («в актор-поверхности не осталось ни одного поля в миллисекундах») остаётся истинной и после
+// сноса — сносится не мс-поле, а лишнее µs-поле.
+//
+// Исключение ровно одно и оно НЕ координата того же момента: `ActorTimerFiredEvent.dueTsUs` —
+// исходный СРОК таймера, отличный от момента срабатывания по построению (§3.8.5), см. doc там.
 
 /** Заявка принята средой (venue/симулятором). */
 export interface ActorOrderAcceptedEvent {
   readonly kind: 'order.accepted';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
@@ -435,7 +458,6 @@ export interface ActorOrderAcceptedEvent {
  */
 export interface ActorOrderDeniedEvent {
   readonly kind: 'order.denied';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly reason: string;
 }
@@ -443,7 +465,6 @@ export interface ActorOrderDeniedEvent {
 /** Заявка отклонена СРЕДОЙ (venue/симулятор). Терминальный. */
 export interface ActorOrderRejectedEvent {
   readonly kind: 'order.rejected';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly reason: string;
 }
@@ -451,7 +472,6 @@ export interface ActorOrderRejectedEvent {
 /** Заявка отменена (по команде `cancel` либо средой). Терминальный. */
 export interface ActorOrderCanceledEvent {
   readonly kind: 'order.canceled';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
@@ -459,8 +479,12 @@ export interface ActorOrderCanceledEvent {
  * Отмена отклонена: команда `cancel` пришла, когда заявка уже была в терминальном состоянии
  * (чаще всего — уже полностью исполнилась) к моменту обработки. Недостающее событие v1 (§3.10,
  * задача 6) — цепочка `cancel → canceled` не знала этого исхода: гонку «отмена против исполнения»
- * в детерминированном бэктесте разрешает правило каскада (§3.8.4, порядок фазы 1 в
- * `MARKET_KIND_RANK`, `contract/constants.ts`), но результат ОБЯЗАН приехать событием — иначе
+ * в детерминированном бэктесте разрешает правило каскада (§3.8.4), а доставка самого исхода живёт
+ * в **фазе 1** нормативного порядка §3.8.1: execution-события идут ПЕРВЫМИ — до due-таймеров, до
+ * рыночных наблюдений и до каскада команд. Ссылки на `MARKET_KIND_RANK` здесь быть НЕ ДОЛЖНО
+ * (ревью владельца на PR sdk#34): тот каталог (`contract/constants.ts`) ранжирует РЫНОЧНЫЕ виды
+ * внутри фаз 3–4 merge key, к execution-фазе отношения не имеет, и прежняя ссылка уводила читателя
+ * не туда. Результат ОБЯЗАН приехать событием — иначе
  * автор не может корректно завершить FSM своей политики выхода: хендлер, ждущий `order.canceled`
  * после поданного `cancel`, никогда не получил бы терминального сигнала и завис бы в
  * промежуточном состоянии политики навсегда. Аналог Nautilus `on_order_cancel_rejected`.
@@ -470,7 +494,6 @@ export interface ActorOrderCanceledEvent {
  */
 export interface ActorOrderCancelRejectedEvent {
   readonly kind: 'cancel.rejected';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly reason: string;
 }
@@ -478,7 +501,6 @@ export interface ActorOrderCancelRejectedEvent {
 /** Заявка истекла по TIF/сроку. Терминальный. */
 export interface ActorOrderExpiredEvent {
   readonly kind: 'order.expired';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
 }
 
@@ -495,7 +517,6 @@ export interface ActorOrderExpiredEvent {
  */
 export interface ActorFillEvent {
   readonly kind: 'fill';
-  readonly ts: TimestampUs;
   readonly clientOrderId: string;
   readonly price: number;
   /** Исполненный размер в базовой валюте инструмента. */
@@ -506,14 +527,39 @@ export interface ActorFillEvent {
 }
 
 /**
- * Срабатывание таймера, поставленного командой `timer.set`. Таймерами владеет ХОСТ: у изолята
- * нет часов. В backtest/paper время двигают бары, в live дополнительно wall-clock-тик — business_ts
- * события в обоих случаях из ленты, нового недетерминизма нет.
+ * Срабатывание таймера, поставленного командой `timer.set` (§3.8.5). Таймерами владеет ХОСТ: у
+ * изолята своих часов нет.
+ *
+ * **Имя вида — `timer.fired`, не `timer`** (ревью владельца на PR sdk#34). Так его называет
+ * НОРМАТИВНЫЙ §3.8.5 спеки; `timer` мелькает в §3.1 — непоследовательность самой спеки, разрешённая
+ * в пользу нормативного раздела. Released-имя `timer` и released-тип `ActorTimerEvent`
+ * (`@trdlabs/sdk@0.13.0`) сняты — ломающее изменение того же класса, что снос `ActorBarEvent`
+ * (см. блок у `OrderSide`); свип импортов по всем восьми репозиториям экосистемы пуст для обоих
+ * имён, построчный вывод приложен к PR.
+ *
+ * **`dueTsUs` — исходный СРОК, а НЕ вторая координата момента срабатывания** (именно поэтому Б-5
+ * снёс `ts`, но ЗАВЁЛ это поле). Таймер материализуется не в свой срок, а в первом frontier `U`,
+ * для которого `U > T && U ≥ dueTs` (§3.8.5, `T` — frontier, в котором таймер поставлен), то есть
+ * на БЛИЖАЙШЕМ ИНСТАНТЕ ДАННЫХ. Конверт несёт `eventTsUs = U` — момент срабатывания; это поле
+ * несёт `dueTs`; опоздание автор выводит как `envelope.eventTsUs − event.dueTsUs`. Без поля
+ * опоздание было бы ненаблюдаемо, и «сработал вовремя» стало бы неотличимо от «сработал через три
+ * часа тишины в ленте» — а на разреженной ленте это разные торговые ситуации. `clock.nowUs()`
+ * внутри диспатча таймера возвращает `U`, не `dueTs`.
+ *
+ * **Часы актора СТРОГО data-driven; wall-clock как источник advance ОТВЕРГНУТ** (§3.10). Прежняя
+ * редакция этой доки обещала обратное — «в live дополнительно wall-clock-тик» — то есть ровно
+ * вариант D2 спайка 083, который §3.10 отвергает дословно и по двум причинам: (1) при разреженных
+ * данных таймер в live сработал бы НЕ ТАМ, где в бэктесте, а расхождение live/backtest — тот класс,
+ * который контракт закрывает по построению и который обязана доказывать Л4 (cross-host parity);
+ * (2) при мёртвом фиде рынок неизвестен, и правильное действие — ОСТАНОВИТЬСЯ, а не исполнить
+ * таймерный выход вслепую. Простой фида компенсируют **host-watchdog и `TradingState`** (см.
+ * `TradingState` ниже) — защита ВНЕ детерминированного контура, а не фальшивое продвижение часов
+ * внутри него: при вставшем фиде frontier'ы не открываются и protective-таймеры честно замирают.
  */
-export interface ActorTimerEvent {
-  readonly kind: 'timer';
-  readonly ts: TimestampUs;
+export interface ActorTimerFiredEvent {
+  readonly kind: 'timer.fired';
   readonly timerId: string;
+  readonly dueTsUs: TimestampUs;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -564,13 +610,16 @@ export const TRADING_STATES = ['normal', 'reducing', 'halted'] as const satisfie
  * ВООБЩЕ — без него «вернулись в normal из halted» и «вернулись в normal из reducing» были бы для
  * автора одним и тем же наблюдением.
  *
+ * А вот собственное поле `ts` этим событием несло РОВНО дублирование Б-1 — и было заведено ЗАНОВО
+ * той самой волной, которая Б-1 закрывала (ревью владельца на PR sdk#34, Б-5). Снято: момент
+ * перехода — `ActorEnvelope.eventTsUs` конверта, которым его доставили, и никакой другой.
+ *
  * Поля `reason` НЕТ намеренно: закрытого каталога причин спека не даёт, а свободная строка
  * воспроизвела бы ровно ту дыру, ради закрытия которой это событие заведено (политика, построенная
  * на разборе человеческого текста). Диагностика причины — забота evidence прогона, не актора.
  */
 export interface ActorTradingStateChangedEvent {
   readonly kind: 'trading_state.changed';
-  readonly ts: TimestampUs;
   readonly previous: TradingState;
   readonly state: TradingState;
 }
@@ -590,7 +639,7 @@ export type ActorInputEvent =
   | ActorOrderCancelRejectedEvent
   | ActorOrderExpiredEvent
   | ActorFillEvent
-  | ActorTimerEvent
+  | ActorTimerFiredEvent
   | ActorTradingStateChangedEvent;
 
 /**
@@ -620,7 +669,7 @@ export const ACTOR_INPUT_EVENT_KINDS = [
   'cancel.rejected',
   'order.expired',
   'fill',
-  'timer',
+  'timer.fired',
   'trading_state.changed',
 ] as const satisfies readonly ActorInputEvent['kind'][];
 
@@ -734,11 +783,16 @@ export interface ActorTimerSetAtCommand {
   readonly atTs: TimestampUs;
 }
 
-/** Таймер через `afterUs` от `ts` обрабатываемого события. */
+/** Таймер через `afterUs` от `eventTsUs` обрабатываемого события. */
 export interface ActorTimerSetAfterCommand {
   readonly kind: 'timer.set';
   readonly timerId: string;
-  /** Смещение от `ts` события, породившего команду. */
+  /**
+   * Смещение от `ActorEnvelope.eventTsUs` события, породившего команду, — то есть от frontier `T`
+   * его доставки (было «от `ts` события», пока у событий был собственный `ts`; Б-5 его снёс, и
+   * единственная база отсчёта теперь одна — конверт). Срок `dueTs = eventTsUs + afterUs`
+   * материализуется по правилу §3.8.5, см. `ActorTimerFiredEvent`.
+   */
   readonly afterUs: DurationUs;
 }
 
@@ -1885,7 +1939,10 @@ export type ActorHandlers<S extends ActorStateValue = ActorStateValue> = {
   onOrderCancelRejected?(event: ActorOrderCancelRejectedEvent, ctx: ActorContext): ActorHandlerResult;
   onOrderExpired?(event: ActorOrderExpiredEvent, ctx: ActorContext): ActorHandlerResult;
   onFill?(event: ActorFillEvent, ctx: ActorContext): ActorHandlerResult;
-  onTimer?(event: ActorTimerEvent, ctx: ActorContext): ActorHandlerResult;
+  /** Имя хендлера — по-прежнему `onTimer` (released в `0.13.0`), хотя вид события переименован в
+   *  `timer.fired`: ревью владельца переименовало СОБЫТИЕ, а не сахар вокруг него, и лишний слом
+   *  released-имени там, где он ничего не чинит, был бы ломающим изменением без причины. */
+  onTimer?(event: ActorTimerFiredEvent, ctx: ActorContext): ActorHandlerResult;
   onTradingStateChanged?(
     event: ActorTradingStateChangedEvent,
     ctx: ActorContext,
@@ -1988,7 +2045,7 @@ export function defineActor<S extends ActorStateValue = ActorStateValue>(
       case 'fill':
         if (handlers.onFill) return toBatch(handlers.onFill(event, ctx));
         break;
-      case 'timer':
+      case 'timer.fired':
         if (handlers.onTimer) return toBatch(handlers.onTimer(event, ctx));
         break;
       case 'trading_state.changed':

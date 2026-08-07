@@ -94,9 +94,12 @@ local status only, no plan duplication.
   prior versions still validate, but may not declare the surface `017.3` introduced —
   otherwise the bump would not have guarded anything.
 
-  E2–E7 stay behind the epic's return trigger and behind Ф3 — nothing in this SDK release executes
-  an actor. What E1 buys now is that `lab` can build event-driven authoring against a vocabulary
-  that will not move under it.
+  The epic's return trigger was **lifted for Ф6 on 2026-08-06** (control-center cc#297): Ф6 is
+  unblocked, and E1 is being rewritten by stage S1 of that decomposition (see the Unreleased entry
+  in `CHANGELOG.md`). E2–E7 are no longer trigger-gated — they are the next stages: S2
+  (`@trdlabs/engine`: dispatcher, budgets, warm-up), S3 (`backtester`), S5 (`platform`:
+  host-watchdog and `TradingState`). Nothing in any SDK release executes an actor; what the SDK
+  buys is that `lab` can build event-driven authoring against a vocabulary with a version gate on it.
 
 Full analysis: control-center
 [`docs/analysis/10-shared-execution-kernel.md`](../../control-center/docs/analysis/10-shared-execution-kernel.md).

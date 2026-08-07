@@ -16,30 +16,42 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 ### 083 S1 — `event_driven` actor contract rewritten (SDK only; runtimes untouched)
 
 Rewrites the `event_driven` kernel contract E1 that shipped in `0.13.0` under `CONTRACT_VERSION
-017.3`. Scope stays SDK-only per the S1 plan: types, constants and the manifest validator — no
-runtime in any repo is touched (the isolate dispatch boundary, the engine and RiskEngine stay S2/S3
-behind the epic's return trigger). `CONTRACT_VERSION` moves `017.3` → `017.4`; `017.1`–`017.3`
+017.3`. The epic's return trigger was lifted for Ф6 on 2026-08-06, so S1 is the first stage of a
+now-unblocked decomposition rather than an early start: scope stays SDK-only per the S1 plan —
+types, constants and the manifest validator — and no runtime in any repo is touched (the isolate
+dispatch boundary, the engine and RiskEngine are S2/S3, the host-watchdog is S5).
+`CONTRACT_VERSION` moves `017.3` → `017.4`; `017.1`–`017.3`
 manifests keep validating for the default `single_position` shape (including one that names it
 explicitly, `lifecycle: 'single_position'` — that declaration is untouched by S1 and still only
 needs `017.3`, the version that introduced the `lifecycle` field itself). What actually requires
 `017.4` is `lifecycle: 'event_driven'` specifically, or `onEvent`/`marketData`/`warmup` — see the
 note under Changed for why `017.3`, which originally introduced that surface, no longer covers it.
 
-> **This release removes five exports that shipped in `@trdlabs/sdk@0.13.0`.** `OpenOrderStatus`,
-> `OpenOrderView`, `PositionView`, `FlatMarketSlice` and `ActorBarEvent` are gone. Three of the five
+> **This release removes six exports that shipped in `@trdlabs/sdk@0.13.0`.** `OpenOrderStatus`,
+> `OpenOrderView`, `PositionView`, `FlatMarketSlice`, `ActorBarEvent` and `ActorTimerEvent` are gone.
+> Three of the six
 > names come back under `Added` below with **incompatible shapes** — a consumer importing
 > `OpenOrderStatus`/`OpenOrderView`/`PositionView` by name still compiles, but a value or literal
 > built against the `0.13.0` shape does not satisfy the new one (see Removed/Added for the exact
 > field-level diff). Every actor-surface timestamp moves from plain `number` milliseconds to the
 > branded µs types `TimestampUs`/`DurationUs`, and the timer command field
 > `afterMs` is renamed `afterUs` to carry the new unit in its name — a silent, non-compile-time-
-> visible unit change for any consumer that read these fields as raw milliseconds. **The five market
-> events no longer carry the legacy value shapes at all**: `Bar`/`OiPoint`/`LiqPoint`/`TakerPoint`/
+> visible unit change for any consumer that read these fields as raw milliseconds. **No actor input
+> event carries a time coordinate of its own any more.** The five market events lost the legacy value
+> shapes entirely: `Bar`/`OiPoint`/`LiqPoint`/`TakerPoint`/
 > `FundingPoint` each had their own millisecond `ts`, which sat next to the envelope's branded
 > `effectiveTsUs` as a second, unrelated coordinate for the same instant; the actor surface now uses
 > its own `ts`-free value types (`CandleValue`/`OpenInterestValue`/`LiquidationsValue`/
 > `TakerVolumeValue`/`FundingValue`) with `ObservedValue.effectiveTsUs` as the single time
-> coordinate. The legacy types themselves are untouched and keep serving the `single_position` form.
+> coordinate. The nine execution-side events (`order.accepted`/`denied`/`rejected`/`canceled`,
+> `cancel.rejected`, `order.expired`, `fill`, the timer event and `trading_state.changed`) lost their
+> `ts: TimestampUs` field for the same reason: an event happens in the frontier it is delivered in,
+> so `ActorEnvelope.eventTsUs` is its only time coordinate. The timer event is the one exception, and
+> it is not a second coordinate of the same instant — it is renamed `timer` → `timer.fired` (the name
+> the normative spec §3.8.5 uses) and carries `dueTsUs`, the *original deadline*, which differs from
+> the firing instant by construction: a timer materializes at the nearest data instant `U` where
+> `U > T && U >= dueTs`, and the author reads the lateness as `envelope.eventTsUs - event.dueTsUs`.
+> The legacy value types themselves are untouched and keep serving the `single_position` form.
 > The legacy
 > `MarketDataKind` (`'openInterest'|'liquidations'|'funding'|'taker'`, the `dataNeeds`-flag catalog)
 > is renamed `LegacyMarketDataKind`; the bare name `MarketDataKind` now refers to the closed
@@ -49,11 +61,21 @@ note under Changed for why `017.3`, which originally introduced that surface, no
 > needed last time (see the note at the top of the `0.13.0` entry below for why this is
 > source/build-breaking despite being wire-additive).
 >
-> `find_usages` across all eight ecosystem repos (backtester, control-center, engine, lab,
-> mock-platform, office, platform, sdk) found no external import of any removed or renamed name
-> before each change shipped — the five exports above (task 2 report) and the `MarketDataKind`
-> rename (task 3 report) — so nothing downstream is known to break today, but anything importing
-> these names from outside the tracked repos should treat this as breaking.
+> An import sweep across all eight ecosystem repos (backtester, control-center, engine, lab,
+> mock-platform, office, platform, sdk) found **no external import of any removed export** — not of
+> the six removed names, not of the renamed `afterMs` field, not of the `timer` event kind. The
+> machine-readable per-symbol, per-repo output is attached to the PR.
+>
+> **One renamed name is not clean, and the earlier claim that it was is withdrawn.** `backtester`
+> *does* consume `MarketDataKind` from this package: `packages/research-contracts/src/research/
+> market-tape.ts` re-exports it verbatim from `@trdlabs/sdk/research-contract` (dependency
+> `^0.13.0`), and `apps/backtester/src/engine/market-tape.ts:98` builds
+> `readonly MarketDataKind[] = ['openInterest', 'liquidations', 'funding', 'taker']` on it. After
+> this release that name denotes the five snake_case `MarketDataRequirement` kinds, so `backtester`
+> **fails to build** until it switches to `LegacyMarketDataKind` (or its own local copy). The task-3
+> sweep missed it by stopping one hop out — the import there reads as coming from another package,
+> which happens to be a thin re-export of this one. The break is loud (a type error), not silent.
+> Anything importing these names from outside the tracked repos should treat this as breaking too.
 
 ### Removed
 
@@ -66,13 +88,32 @@ note under Changed for why `017.3`, which originally introduced that surface, no
   single `subscriptionId`/`datasetId` when its sources (OI, liquidations, taker, funding) arrive at
   different times with different value semantics (point observation vs. interval aggregate) — see
   the doc block atop `ActorInputEvent` in `event-driven.ts`.
+- `research-contract`: `ActorTimerEvent` (`{ kind: 'timer', ts, timerId }`) and with it the event
+  kind name `'timer'`. Replaced by `ActorTimerFiredEvent` (`{ kind: 'timer.fired', timerId,
+  dueTsUs }`) under Added — the normative spec §3.8.5 names the event `timer.fired` (`timer` appears
+  only in §3.1, an inconsistency of the spec itself, resolved in favour of the normative section)
+  and requires the firing envelope to carry `eventTsUs = U` with the original deadline stored
+  separately as `dueTsUs`. The `defineActor` handler keeps its released name `onTimer`; only the
+  event and its kind are renamed.
 
 ### Added (083 S1, tasks 1–6)
 
 - `research-contract`: `TimestampUs`/`DurationUs` branded µs types (`time-us.ts`) — the actor
-  surface's only internal time unit from here on, replacing `number` milliseconds on every envelope,
-  order/fill/timer event, timer command field **and market-event payload** (the payloads were the
-  last millisecond holdout — see the `*Value` types below).
+  surface's only internal time unit from here on, replacing `number` milliseconds on the envelope,
+  the timer command fields, `OpenOrderView.createdTs`, the execution-ledger entries and the timer
+  event's `dueTsUs`. Event payloads went further and dropped their time field altogether (see
+  `ActorTimerFiredEvent` and the `*Value` types below).
+- `research-contract`: `ActorTimerFiredEvent` (`{ kind: 'timer.fired', timerId, dueTsUs }`) —
+  replaces the removed `ActorTimerEvent`/`'timer'`. `dueTsUs` is the original deadline, deliberately
+  distinct from the firing instant carried by `ActorEnvelope.eventTsUs`: per §3.8.5 a timer set in
+  frontier `T` materializes in the first frontier `U` where `U > T && U >= dueTs` — i.e. at the
+  nearest *data* instant, never at a synthetic intra-bar tick — so lateness is observable as
+  `envelope.eventTsUs - event.dueTsUs`. The actor's clock is strictly data-driven: **wall-clock as a
+  source of advance is rejected** (§3.10, the D2 option from the 083 spike). Under sparse data it
+  would fire a live timer somewhere a backtest never would, which is exactly the live/backtest
+  divergence class Л4 has to prove absent; and with a dead feed the right action is to stop, not to
+  execute a timed exit blind. Feed stalls are compensated by the host-watchdog and `TradingState`,
+  outside the deterministic loop, not by advancing the clock inside it.
 - `research-contract`: five separate market events replacing `ActorBarEvent` —
   `MarketCandleClosedEvent`, `MarketOpenInterestObservedEvent`,
   `MarketLiquidationsBucketClosedEvent`, `MarketTakerVolumeBucketClosedEvent`,
@@ -191,18 +232,30 @@ note under Changed for why `017.3`, which originally introduced that surface, no
   earlier in S1). New exported constant: `LIFECYCLE_FIELD_MIN_CONTRACT_VERSION` (`017.3`), alongside
   the existing `EVENT_DRIVEN_MIN_CONTRACT_VERSION` (now `017.4`) — `research-contract/event-driven.ts`.
 - `research-contract`: `ActorTimerSetAfterCommand.afterMs: number` → `afterUs: DurationUs`; every
-  `ts` / `atTs` / `createdTs` on the actor surface moves from `number` (implicitly milliseconds) to
+  remaining `atTs` / `createdTs` / ledger `ts` on the actor surface moves from `number` (implicitly
+  milliseconds) to
   `TimestampUs` / `DurationUs` (µs, the sole internal unit `§3.2` of the actor spec requires) so
-  that a forgotten `* 1000` stops being executable code. The five market events' payloads move with
-  them, to `ts`-free value types (see Added) — until they did, "no millisecond field is left on the
-  actor surface" was not yet true.
+  that a forgotten `* 1000` stops being executable code. `ActorTimerSetAfterCommand.afterUs` is now
+  documented as an offset from the *envelope's* `eventTsUs`, since events no longer have a `ts` to
+  offset from.
+- `research-contract`: **every actor input event lost its own time field.** The five market events'
+  payloads went first, to `ts`-free value types (see Added) — until they did, "no millisecond field
+  is left on the actor surface" was not yet true. The nine execution-side events
+  (`order.accepted`/`denied`/`rejected`/`canceled`, `cancel.rejected`, `order.expired`, `fill`, the
+  timer event, `trading_state.changed`) followed for the same reason, one review round later: their
+  `ts` was already a branded µs field, so this is not a unit change but a *count* change — an event
+  happens in the frontier it is delivered in, so two coordinates of one instant on one object either
+  duplicate each other or disagree, and `ActorEnvelope.eventTsUs` is the one that survives. The only
+  time field left on any event payload is `ActorTimerFiredEvent.dueTsUs`, which is a different
+  instant by construction, not a copy of `eventTsUs`.
 - `validation`: the bundled JSON Schemas now enforce the numeric constraints the contract documents
   and previously only stated in prose. `TimestampUs` is `{"type":"integer","minimum":0}` (was
   `{"type":"number"}`), `DurationUs` is `integer` (sign still allowed — it is a difference of two
   instants), `ObservedValue.revision` is a non-negative integer, `qty`/`qtyUsd` carry
   `exclusiveMinimum: 0`, and the non-negative market quantities (`volume`, `oiTotalUsd`,
   `longUsd`/`shortUsd`, `buyUsd`/`sellUsd`) carry `minimum: 0`. Until this release, `timer.set` with
-  `atTs: 1.5` or `atTs: -1000`, a `fill` with `ts: 1.5` or `qty: -5`, and `revision: -1.5` were all
+  `atTs: 1.5` or `atTs: -1000`, an event with a fractional or negative µs instant, a `fill` with
+  `qty: -5`, and `revision: -1.5` were all
   **valid** against the shipped schemas — the schema is the only gate on the isolate boundary, where
   the `timestampUs()`/`durationUs()` runtime constructors never run. A side effect on the manifest
   path: a fractional `MarketDataRequirement.interval` is now rejected as `schema_invalid` (before, it
@@ -218,20 +271,23 @@ note under Changed for why `017.3`, which originally introduced that surface, no
 
 ### Migration
 
-No consumer imports the five removed exports or the pre-rename `MarketDataKind` from
-`@trdlabs/sdk` today — verified by `find_usages` across all eight ecosystem repos before each
-removal/rename shipped (task 2 report for the five exports, task 3 report for the rename) — so
-nothing downstream is known to break. Authoring
+No consumer imports the six removed exports from `@trdlabs/sdk` today — verified by an import sweep
+across all eight ecosystem repos (per-symbol output attached to the PR). **`MarketDataKind` is the
+exception**: `backtester` re-exports it through `@trading/research-contracts` and will fail to build
+against the new meaning — see the warning block at the top of this entry for the exact file and
+line, and switch that consumer to `LegacyMarketDataKind`. Authoring
 (or generating) an `event_driven` module against the `0.13.0` shapes does need to move: bump
 `contractVersion` to `017.4`; construct every actor-surface timestamp with `timestampUs()`/
 `durationUs()` instead of a raw millisecond number; rename `afterMs` to `afterUs`; drop the `ts`
-field from every market-event payload and read the instant from `ObservedValue.effectiveTsUs`
-instead (and stop expecting `{state:'missing'|'stale'}` inside a market event — subscribe to
-`market.subscription.status_changed` for that); and read
+field from **every** event — market payloads read their instant from `ObservedValue.effectiveTsUs`,
+execution events read theirs from `ActorEnvelope.eventTsUs` (and stop expecting
+`{state:'missing'|'stale'}` inside a market event — subscribe to
+`market.subscription.status_changed` for that); rename the `timer` event to `timer.fired` and read
+`dueTsUs` (the deadline) rather than a firing timestamp — `onTimer` keeps its name; and read
 `OpenOrderView`/`PositionView` against their redesigned shape (see Added above), not the `0.13.0`
-one — there is no compatibility shim between the two. Nothing here executes yet: S2
-(`@trdlabs/engine`) still gates the epic's return trigger, and this release changes no runtime in
-any repo.
+one — there is no compatibility shim between the two. Nothing here executes yet: this release
+changes no runtime in any repo — the dispatcher, budgets and warm-up are S2 (`@trdlabs/engine`),
+the host-watchdog driving `TradingState` is S5 (`platform`).
 
 ## [0.13.0] - 2026-07-23
 

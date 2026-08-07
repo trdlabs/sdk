@@ -13,11 +13,28 @@
  * Держать оба под одним именем значило бы закрепить именно ту коллизию, ради устранения которой
  * задача затевалась: потребитель `import type { MarketDataKind } from '@trdlabs/sdk'` получал бы
  * ЭТОТ (camelCase, четыре вида), не имеющий отношения к `MarketDataRequirement['kind']`.
- * Проверено 2026-08-06 прямым grep по всем восьми репозиториям экосистемы (backtester,
- * control-center, engine, lab, mock-platform, office, platform, sdk) — внешних импортов
- * `MarketDataKind` из `@trdlabs/sdk` нет: `lab`/`mock-platform`/`platform` держат СВОИ независимые
- * локальные копии этой формы (не импортируют её из sdk), `backtester` импортирует одноимённый тип
- * из другого пакета (`@trading/research-contracts`). Переименование безопасно.
+ * **ПОПРАВКА (свип ревью владельца на PR sdk#34): для `backtester` переименование НЕ безопасно.**
+ * Прежняя редакция этого блока утверждала «внешних импортов `MarketDataKind` из `@trdlabs/sdk`
+ * нет», потому что свип задачи 3 остановился на ПЕРВОМ звене: у `backtester` импорт действительно
+ * идёт «из другого пакета» — `@trading/research-contracts`. Но этот пакет — ТОНКИЙ РЕЭКСПОРТ:
+ * `packages/research-contracts/src/research/market-tape.ts` содержит
+ * `export type { …, MarketDataKind, … } from '@trdlabs/sdk/research-contract'` и зависит от
+ * `@trdlabs/sdk: ^0.13.0`. Цепочка целиком: `apps/backtester/src/engine/market-tape.ts` →
+ * `@trading/research-contracts/research` → `@trdlabs/sdk/research-contract` → ЭТОТ пакет. Реэкспорт
+ * прозрачен, поэтому ссылка внешняя, и «импортирует из другого пакета» её не отменяет.
+ *
+ * Что именно ломается: `apps/backtester/src/engine/market-tape.ts:98` —
+ * `const COVERAGE_KIND_ORDER: readonly MarketDataKind[] = ['openInterest', 'liquidations',
+ * 'funding', 'taker']`. Диапазон `^0.13.0` подтянет новую версию, `MarketDataKind` станет пятёркой
+ * snake_case, и `'openInterest'`/`'taker'` перестанут быть её членами — ошибка СБОРКИ у
+ * потребителя, а не молчаливая подмена (`'liquidations'`/`'funding'` совпадают по написанию, но
+ * это совпадение написания, не совместимость смысла). Правка — на стороне `backtester` (перейти на
+ * `LegacyMarketDataKind` либо на собственную локальную копию); в этой ветке она вне скоупа, правило
+ * ветки запрещает файлы вне `sdk`.
+ *
+ * Остальные семь репозиториев чисты: `lab`/`mock-platform`/`platform` держат СВОИ независимые
+ * локальные копии этой формы и из `sdk` её не импортируют. Построчный свип (символ × дерево ×
+ * коммит) приложен к PR.
  */
 export type LegacyMarketDataKind = 'openInterest' | 'liquidations' | 'funding' | 'taker';
 

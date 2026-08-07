@@ -97,7 +97,7 @@ function labelOf(kind: ActorInputEvent['kind']): string {
       return kind;
     case 'fill':
       return kind;
-    case 'timer':
+    case 'timer.fired':
       return kind;
     case 'trading_state.changed':
       return kind;
@@ -129,7 +129,7 @@ test('ACTOR_INPUT_EVENT_KINDS содержит ровно те виды, что 
     'cancel.rejected',
     'order.expired',
     'fill',
-    'timer',
+    'timer.fired',
     'trading_state.changed',
   ];
   assert.deepEqual([...ACTOR_INPUT_EVENT_KINDS].sort(), [...expected].sort());
@@ -315,5 +315,99 @@ test('Б-2: «наблюдено, что наблюдения не было» н
       status: { state: 'gap', expectedTsUs: 1_700_000_000_000_000 },
     }),
     [],
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ревью владельца на PR sdk#34, Б-5: избыточной временной координаты нет и на
+// ИСПОЛНИТЕЛЬНОЙ стороне — тот же дефект, что Б-1 закрыл у рыночных событий.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Б-5: ни одно из девяти исполнительных событий не несёт собственного `ts` — ни типом, ни схемой', () => {
+  // Типовая половина: `ts` — лишнее поле на СВЕЖЕМ литерале (excess-property-check против ветки
+  // union'а, выбранной дискриминантом `kind`).
+  const accepted: ActorInputEvent = {
+    kind: 'order.accepted',
+    clientOrderId: 'o-1',
+    // @ts-expect-error — у order.accepted нет `ts`: момент несёт ActorEnvelope.eventTsUs.
+    ts: 1_700_000_000_000_000,
+  };
+  void accepted;
+
+  const fill: ActorInputEvent = {
+    kind: 'fill',
+    clientOrderId: 'o-1',
+    price: 1,
+    qty: 1,
+    fee: 0,
+    last: true,
+    // @ts-expect-error — у fill нет `ts`.
+    ts: 1_700_000_000_000_000,
+  };
+  void fill;
+
+  const tradingState: ActorInputEvent = {
+    kind: 'trading_state.changed',
+    previous: 'normal',
+    state: 'reducing',
+    // @ts-expect-error — у trading_state.changed нет `ts`; поле было заведено ЗАНОВО той же волной,
+    // которая закрывала Б-1 у рыночных событий, и снято здесь.
+    ts: 1_700_000_000_000_000,
+  };
+  void tradingState;
+
+  // Схемная половина: то же самое там, где типов вызывающего нет вовсе (правило №7). Сначала — что
+  // форма БЕЗ `ts` валидна, потом — что она же с `ts` отвергается; иначе тест был бы зелёным и на
+  // схеме, отвергающей всё подряд.
+  const withoutTs: readonly (readonly [string, Record<string, unknown>])[] = [
+    ['order.accepted', { kind: 'order.accepted', clientOrderId: 'o-1' }],
+    ['order.denied', { kind: 'order.denied', clientOrderId: 'o-1', reason: 'max_notional' }],
+    ['order.rejected', { kind: 'order.rejected', clientOrderId: 'o-1', reason: 'venue' }],
+    ['order.canceled', { kind: 'order.canceled', clientOrderId: 'o-1' }],
+    ['cancel.rejected', { kind: 'cancel.rejected', clientOrderId: 'o-1', reason: 'already_filled' }],
+    ['order.expired', { kind: 'order.expired', clientOrderId: 'o-1' }],
+    ['fill', { kind: 'fill', clientOrderId: 'o-1', price: 1.5, qty: 10, fee: 0.01, last: true }],
+    ['timer.fired', { kind: 'timer.fired', timerId: 't-1', dueTsUs: 1_700_000_000_000_000 }],
+    ['trading_state.changed', { kind: 'trading_state.changed', previous: 'normal', state: 'reducing' }],
+  ];
+  assert.equal(withoutTs.length, 9, 'Б-5 назвал ровно девять исполнительных событий');
+
+  for (const [label, event] of withoutTs) {
+    assert.deepEqual(registry.validateCore('actor-input-event', event), [], `форма без ts валидна: ${label}`);
+    assert.ok(
+      registry.validateCore('actor-input-event', { ...event, ts: 1_700_000_000_000_000 }).length > 0,
+      `схема обязана отвергнуть вторую временную координату: ${label}`,
+    );
+  }
+});
+
+test('Б-5: таймер называется `timer.fired` и несёт СРОК `dueTsUs`, а не момент срабатывания', () => {
+  // Имя из НОРМАТИВНОГО §3.8.5; released-имя `timer` снято вместе с released-типом ActorTimerEvent.
+  assert.ok(
+    (ACTOR_INPUT_EVENT_KINDS as readonly string[]).includes('timer.fired'),
+    'нормативное имя обязано быть в каталоге',
+  );
+  assert.ok(
+    !(ACTOR_INPUT_EVENT_KINDS as readonly string[]).includes('timer'),
+    'снятое имя `timer` не должно оставаться в каталоге',
+  );
+
+  // `dueTsUs` ОБЯЗАТЕЛЕН: без него опоздание `eventTsUs − dueTsUs` невыводимо, и «сработал вовремя»
+  // неотличимо от «сработал через три часа тишины в ленте».
+  const fired: ActorInputEvent = { kind: 'timer.fired', timerId: 't-1', dueTsUs: timestampUs(1) };
+  assert.equal(fired.kind, 'timer.fired');
+
+  // @ts-expect-error — dueTsUs обязателен.
+  const withoutDue: ActorInputEvent = { kind: 'timer.fired', timerId: 't-1' };
+  void withoutDue;
+
+  assert.ok(
+    registry.validateCore('actor-input-event', { kind: 'timer.fired', timerId: 't-1' }).length > 0,
+    'схема обязана требовать dueTsUs',
+  );
+  // И имени `timer` схема больше не знает вовсе.
+  assert.ok(
+    registry.validateCore('actor-input-event', { kind: 'timer', timerId: 't-1' }).length > 0,
+    'снятое имя события не должно валидироваться схемой',
   );
 });

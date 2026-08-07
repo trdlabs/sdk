@@ -201,7 +201,6 @@ test('cancel.rejected присутствует в ACTOR_INPUT_EVENT_KINDS ров
 test('cancel.rejected: замкнутый союз ActorInputEvent принимает форму и различает kind структурно', () => {
   const event: ActorInputEvent = {
     kind: 'cancel.rejected',
-    ts: timestampUs(1_700_000_000_000_000),
     clientOrderId: 'o-1',
     reason: 'already_filled',
   };
@@ -211,7 +210,6 @@ test('cancel.rejected: замкнутый союз ActorInputEvent приним�
   // литерал без него не должен типизироваться как ActorInputEvent.
   const missingReason: ActorInputEvent = {
     kind: 'cancel.rejected',
-    ts: timestampUs(1),
     clientOrderId: 'o-1',
   };
   void missingReason;
@@ -380,7 +378,6 @@ test('Б-3: переход режима приезжает СОБЫТИЕМ в �
 
   const event: ActorInputEvent = {
     kind: 'trading_state.changed',
-    ts: timestampUs(1_700_000_000_000_000),
     previous: 'normal',
     state: 'reducing',
   };
@@ -391,7 +388,6 @@ test('Б-3: переход режима приезжает СОБЫТИЕМ в �
   // @ts-expect-error — previous обязателен.
   const withoutPrevious: ActorInputEvent = {
     kind: 'trading_state.changed',
-    ts: timestampUs(1),
     state: 'reducing',
   };
   void withoutPrevious;
@@ -400,7 +396,6 @@ test('Б-3: переход режима приезжает СОБЫТИЕМ в �
   assert.deepEqual(
     registry.validateCore('actor-input-event', {
       kind: 'trading_state.changed',
-      ts: 1_700_000_000_000_000,
       previous: 'normal',
       state: 'halted',
     }),
@@ -409,7 +404,6 @@ test('Б-3: переход режима приезжает СОБЫТИЕМ в �
   assert.ok(
     registry.validateCore('actor-input-event', {
       kind: 'trading_state.changed',
-      ts: 1_700_000_000_000_000,
       previous: 'normal',
       state: 'paused',
     }).length > 0,
@@ -466,13 +460,35 @@ test('Б-4: схема отвергает дробные и отрицатель
   assert.deepEqual(registry.validateCore('actor-command', { kind: 'timer.set', timerId: 't', afterUs: -60_000 }), []);
 });
 
-test('Б-4: схема отвергает дробный ts, неположительный qty и невалидный revision в событиях', () => {
-  const baseFill = { kind: 'fill', ts: 1_700_000_000_000_000, clientOrderId: 'o', price: 100, fee: 0, last: true };
+test('Б-4: схема отвергает дробную µs-метку, неположительный qty и невалидный revision в событиях', () => {
+  // Б-5 снёс `ts` со всех девяти исполнительных событий, поэтому µs-ограничение пинуется на
+  // ОСТАВШИХСЯ `TimestampUs`-полях события: `dueTsUs` таймера и `effectiveTsUs` наблюдения. Само
+  // ограничение — то же самое определение `TimestampUs` в схеме, ради которого написан Б-4.
+  const baseFill = { kind: 'fill', clientOrderId: 'o', price: 100, fee: 0, last: true };
   assert.deepEqual(registry.validateCore('actor-input-event', { ...baseFill, qty: 1.5 }), [], 'дробный qty легален');
 
+  const baseTimer = { kind: 'timer.fired', timerId: 't' };
+  assert.deepEqual(
+    registry.validateCore('actor-input-event', { ...baseTimer, dueTsUs: 1_700_000_000_000_000 }),
+    [],
+    'целая неотрицательная dueTsUs легальна',
+  );
+
   for (const [label, event] of [
-    ['ts дробный', { ...baseFill, ts: 1.5, qty: 1 }],
-    ['ts отрицательный', { ...baseFill, ts: -1, qty: 1 }],
+    ['dueTsUs дробный', { ...baseTimer, dueTsUs: 1.5 }],
+    ['dueTsUs отрицательный', { ...baseTimer, dueTsUs: -1 }],
+    [
+      'effectiveTsUs дробный',
+      {
+        kind: 'market.candle.closed',
+        candle: {
+          effectiveTsUs: 1.5,
+          value: { open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 },
+          finality: 'final',
+          revision: 0,
+        },
+      },
+    ],
     ['qty = 0', { ...baseFill, qty: 0 }],
     ['qty отрицательный', { ...baseFill, qty: -5 }],
     [
