@@ -215,8 +215,13 @@ export interface MarketTapeDataset {
  * Поддержанные market-data kind'ы (синхронно с catalogs.ts `SUPPORTED_MARKET_DATA_KINDS`).
  * Sync-инвариант: ручной mirror закрытого литерала каталога; гейт `verify_030_catalog_version` ассертит
  * согласованность. 030: +funding/taker.
+ *
+ * Переименован из `MarketDataKind` (083 S1 задача 3, раунд правок 2, С-3/К-2) — имя освобождено
+ * под НОВЫЙ каталог `contract/constants.ts::MarketDataKind` (`MarketDataRequirement['kind']`,
+ * пятёрка snake_case); это coverage-таксономия для `single_position`-контекста `ctx.market`,
+ * семантически другая ось. Проверено: внешних потребителей старого имени вне sdk нет.
  */
-export type MarketDataKind = 'openInterest' | 'liquidations' | 'funding' | 'taker';
+export type LegacyMarketDataKind = 'openInterest' | 'liquidations' | 'funding' | 'taker';
 
 /** Непрерывное окно непокрытых минут [tsFrom, tsTo] (inclusive), minute-aligned. */
 export interface MarketDataGap {
@@ -235,7 +240,7 @@ export type MarketDataCoverageState = 'present' | 'missing' | 'stale' | 'unsuppo
 /** Сводка покрытия одного (symbol, kind) за запрошенный период. */
 export interface KindCoverage {
   readonly symbol: string;
-  readonly kind: MarketDataKind;
+  readonly kind: LegacyMarketDataKind;
   /** Несёт ли лента этот kind для символа ВООБЩЕ (иначе — кандидат на missing_required, §R6). */
   readonly present: boolean;
   /** Кол-во покрытых минут (наблюдавшихся; снимок есть, в т.ч. liq 0/0). */
@@ -277,6 +282,15 @@ export interface FundingPoint {
   readonly ts: number;
   readonly fundingRate: number; // 0/отрицательный — валидны
 }
+
+// Область действия трёхсостоянийных ридингов ниже (`FundingReading`/`TakerReading`) — ТОЛЬКО
+// pull-модель `PointInTimeMarketApi` формы `single_position`: её спрашивают в произвольный момент
+// `t`, и она обязана уметь ответить «снимок есть, но просрочен» / «снимка нет». На СОБЫТИЙНОЙ
+// поверхности актора их нет и не должно быть (083 S1, финальная волна ревью ветки, Б-2): событие
+// эмитится на закрытии бакета либо на реальном наблюдении, поэтому несёт только present-значение
+// (`TakerVolumeValue`/`FundingValue`, `event-driven.ts`), а отсутствие выражается отдельным
+// каналом `market.subscription.status_changed`. Событие со значением `{state:'missing'}` было бы
+// высказыванием «наблюдено, что наблюдения не было», и схема актор-события его больше не принимает.
 
 /**
  * 030 — freshness-aware funding reading для текущей закрытой минуты `t`. **3-state** (`present|stale|missing`);

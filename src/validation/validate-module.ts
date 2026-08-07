@@ -10,6 +10,7 @@ import {
   DEFAULT_STRATEGY_LIFECYCLE,
   EVENT_DRIVEN_HOOKS,
   EVENT_DRIVEN_MIN_CONTRACT_VERSION,
+  LIFECYCLE_FIELD_MIN_CONTRACT_VERSION,
   STRATEGY_LIFECYCLES,
   type StrategyLifecycle,
 } from '../research-contract/event-driven.js';
@@ -84,6 +85,140 @@ const NONDETERMINISM_NEEDS = ['wallClock', 'uncontrolledRandom'] as const;
 /** Структурные point-in-time потребности 017 (всегда легитимны). */
 const STRUCTURAL_NEEDS = ['closedCandlesUpToCurrent', 'asOfIndicators'] as const;
 
+/**
+ * 083 S1 задача 3 — семантика `manifest.marketData`, которую JSON-схема (шаг 1) не выражает: три
+ * ЗАКРЫТЫЕ оси (`scope`, `revisionPolicy.mode`, `funding.form`) и структурная адекватность
+ * (`id`/`lookback`/`interval`/`instrument`) — ТИПОВО легальные значения, схема их пропустит.
+ *
+ * Три оси проверяются БЕЛЫМ списком, не чёрным (раунд правок 2, К-4): каталог `kind` защищён
+ * двусторонней типовой гарантией (`event-driven.ts`), но `scope`/`revisionPolicy.mode`/
+ * `funding.form` — обычные string-поля без такой защиты; чёрный список (`=== 'venue'`) пропускал
+ * бы ЛЮБОЕ третье значение без единого issue, хотя дока обещает «только aggregate»/«только
+ * final_only»/«только rate». Тот же принцип уже применяет соседний `recognizedNeeds` выше (023).
+ *
+ * Все три v1-отклонения — СВОЙСТВО АРХИВА, ни одно не дорожная карта (раунд правок 2, С-1: прежняя
+ * формулировка «revisionPolicy не реализован» была ошибкой брифа, поправленной владельцем прозой —
+ * полное обоснование в doc `RevisionPolicy`, `event-driven.ts`).
+ *
+ * Вход НЕ типизирован как `MarketDataRequirement[]` намеренно: на входе валидатора — недоверенный
+ * JSON, а не типизированное значение (та же дисциплина, что `asRecord`/`dataNeeds` выше). Элемент,
+ * структурно не дотягивающий до объекта, здесь молча пропускается — за него уже отвечает
+ * `schema_invalid` (шаг 1).
+ */
+function validateMarketDataRequirements(marketData: unknown, issues: ValidationIssue[]): void {
+  if (!Array.isArray(marketData)) return;
+  const seenIds = new Set<string>();
+
+  marketData.forEach((entry, i) => {
+    const req = asRecord(entry);
+    if (req === null) return;
+    const base = `/marketData/${i}`;
+
+    // Белый список: scope легален ТОЛЬКО 'aggregate', когда присутствует — candles его вообще не
+    // несёт (undefined там структурная норма, не отсутствующее значение).
+    if (req.scope !== undefined && req.scope !== 'aggregate') {
+      issues.push(
+        makeIssue(
+          'unsupported_market_data_scope',
+          `scope "${String(req.scope)}" не резолвится в v1 — архив не хранит и не будет хранить ` +
+            `по-источниковые значения (kind "${String(req.kind)}")`,
+          `${base}/scope`,
+        ),
+      );
+    }
+
+    // Белый список: revisionPolicy.mode легален ТОЛЬКО 'final_only'. Отсутствие всего поля сюда
+    // не заходит (revisionPolicy === null): по умолчанию равносильно final_only (м-8).
+    const revisionPolicy = asRecord(req.revisionPolicy);
+    if (revisionPolicy !== null && revisionPolicy.mode !== 'final_only') {
+      issues.push(
+        makeIssue(
+          'unsupported_revision_policy',
+          `revisionPolicy.mode "${String(revisionPolicy.mode)}" не резолвится в v1 — колонок ` +
+            `finality/revision в архиве нет: строка одна на (minute_ts, symbol), второй записи с ` +
+            `тем же ключом физически негде лежать (принимается только final_only)`,
+          `${base}/revisionPolicy/mode`,
+        ),
+      );
+    }
+
+    // Белый список: form легален ТОЛЬКО 'rate' — проверяется только у funding, у остальных видов
+    // поля form не существует вовсе.
+    if (req.kind === 'funding' && req.form !== 'rate') {
+      issues.push(
+        makeIssue(
+          'unsupported_funding_form',
+          `funding с form "${String(req.form)}" не резолвится в v1: соответствующего датасета ` +
+            `(колонки settlement) в архиве нет`,
+          `${base}/form`,
+        ),
+      );
+    }
+
+    // К-5: id — единственная ручка связи требования с binding'ом ниже по цепочке (задача 8);
+    // дубль делает связывание неоднозначным именно там, где резолвер обязан быть fail-closed.
+    if (typeof req.id === 'string') {
+      if (req.id.length === 0) {
+        issues.push(
+          makeIssue('invalid_market_data_requirement', 'id требования не может быть пустой строкой', `${base}/id`),
+        );
+      } else if (seenIds.has(req.id)) {
+        issues.push(
+          makeIssue(
+            'duplicate_market_data_requirement_id',
+            `id "${req.id}" уже использован другим требованием этого манифеста`,
+            `${base}/id`,
+          ),
+        );
+      }
+      seenIds.add(req.id);
+    }
+
+    // м-1: числовые/строковые границы, которые тип не выражает (DurationUs допускает отрицательные
+    // значения как разность моментов — здесь interval, а не разность, отрицательное/нулевое
+    // значение бессмысленно; lookback — число шагов, отрицательное/дробное тоже).
+    if (typeof req.lookback === 'number' && (!Number.isInteger(req.lookback) || req.lookback < 0)) {
+      issues.push(
+        makeIssue(
+          'invalid_market_data_requirement',
+          `lookback должен быть целым неотрицательным числом шагов длиной interval, получено: ${req.lookback}`,
+          `${base}/lookback`,
+        ),
+      );
+    }
+    if (typeof req.interval === 'number' && (!Number.isInteger(req.interval) || req.interval <= 0)) {
+      issues.push(
+        makeIssue(
+          'invalid_market_data_requirement',
+          `interval должен быть положительным целым числом микросекунд, получено: ${req.interval}`,
+          `${base}/interval`,
+        ),
+      );
+    }
+    const instrument = asRecord(req.instrument);
+    if (instrument !== null) {
+      if (typeof instrument.venue === 'string' && instrument.venue.length === 0) {
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            'instrument.venue не может быть пустой строкой',
+            `${base}/instrument/venue`,
+          ),
+        );
+      }
+      if (typeof instrument.symbol === 'string' && instrument.symbol.length === 0) {
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            'instrument.symbol не может быть пустой строкой',
+            `${base}/instrument/symbol`,
+          ),
+        );
+      }
+    }
+  });
+}
+
 /** Пометить любые поля зоны risk/execution на верхнем уровне `obj` как `separation_violation`. */
 function scanSeparation(
   obj: Record<string, unknown>,
@@ -152,10 +287,21 @@ function validateSampleDecisions(
 }
 
 /**
- * 083 E1 — новый surface конверта ограждён объявленной версией контракта.
+ * 083 E1/S1 — новый surface конверта ограждён объявленной версией контракта.
  *
  * `SUPPORTED_CONTRACT_VERSIONS` — возрастающий список, поэтому «не старше» проверяется позицией в
  * нём, без semver-парсера. Версия вне набора уже отклонена шагом 2 — здесь не дублируем.
+ *
+ * **ДВА порога, не один** (задача 6, ревью раунда 1, I-1, Important — исправлена регрессия
+ * первой версии задачи 6, где явный `lifecycle: 'single_position'` под `017.3` ошибочно требовал
+ * `017.4`). `lifecycle === 'event_driven'` (или `onEvent`/`marketData`/`warmup`) — ПЕРЕПИСАННЫЙ
+ * задачами 1–5 surface, порог `EVENT_DRIVEN_MIN_CONTRACT_VERSION` (`017.4`). Голое присутствие
+ * поля `lifecycle` (ЛЮБОЕ значение, включая `single_position`) — исходный E1-словарь `0.13.0`,
+ * которого S1 не касался, порог `LIFECYCLE_FIELD_MIN_CONTRACT_VERSION` (`017.3`, ниже
+ * `EVENT_DRIVEN_MIN_CONTRACT_VERSION`). Смешивание этих порогов в одном предикате — ровно тот
+ * дефект, который поймало ревью: `single_position`, явно объявленный автором, не использует НИ
+ * ОДНОГО бита переписанного surface, и требовать от него `017.4` значило бы наказывать форму,
+ * которую S1 не трогал вовсе.
  */
 function validateSurfaceContractVersion(
   manifest: ModuleManifest,
@@ -163,8 +309,32 @@ function validateSurfaceContractVersion(
   ctx: ContractContext,
   issues: ValidationIssue[],
 ): void {
-  const usesEventDrivenSurface = manifest.lifecycle !== undefined || hooks.includes('onEvent');
-  if (!usesEventDrivenSurface) return;
+  // К-1 (раунд правок 2, Critical, задача 3): `marketData` — ТОЖЕ часть ПЕРЕПИСАННОГО surface
+  // актора и обязана ограждаться версией на равных с `lifecycle: 'event_driven'`/`onEvent`; без
+  // этого пункта манифест 017.1 с `hooks:['onBarClose']` и блоком `marketData` проходил бы с нулём
+  // issues — ровно тот случай, который делает bump версии чисто декларативным (комментарий у
+  // `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
+  //
+  // `warmup` (задача 6, долг задачи 3 — тот же класс дыры, что К-1 закрывала для `marketData`):
+  // поле заведено задачей 3 (`ModuleManifest.warmup?: ActorWarmupSource`), но НЕ было включено в
+  // этот гейт до задачи 6 — манифест 017.1/017.2 с `warmup` без `lifecycle`/`marketData` проходил
+  // бы версионный гейт молча. `warmup` осмыслен ТОЛЬКО для формы `event_driven` (прогрев готовит
+  // актора к первому торгующему событию), значит принадлежит тому же surface и тому же гейту.
+  //
+  // `manifest.lifecycle === 'event_driven'`, НЕ `!== undefined` (I-1): явный `single_position` —
+  // дефолтная форма, не тронутая S1, и живёт под НИЖНИМ порогом `declaresLifecycleField` ниже.
+  const usesRewrittenActorSurface =
+    manifest.lifecycle === 'event_driven' ||
+    hooks.includes('onEvent') ||
+    manifest.marketData !== undefined ||
+    manifest.warmup !== undefined;
+
+  // Голое присутствие поля `lifecycle` — ЛЮБОЕ значение, включая мусорное (схема ловит это
+  // отдельно, `schema_invalid`) — уже surface исходного E1-словаря (`017.3`), даже когда значение
+  // не `event_driven`.
+  const declaresLifecycleField = manifest.lifecycle !== undefined;
+
+  if (!usesRewrittenActorSurface && !declaresLifecycleField) return;
 
   const declared: unknown = manifest.contractVersion;
   if (typeof declared !== 'string') return;
@@ -172,14 +342,20 @@ function validateSurfaceContractVersion(
   const declaredIdx = supported.indexOf(declared);
   if (declaredIdx < 0) return; // версия вне набора — причина уже выставлена
 
-  const introducedIdx = supported.indexOf(EVENT_DRIVEN_MIN_CONTRACT_VERSION);
+  const requiredVersion = usesRewrittenActorSurface
+    ? EVENT_DRIVEN_MIN_CONTRACT_VERSION
+    : LIFECYCLE_FIELD_MIN_CONTRACT_VERSION;
+  const introducedIdx = supported.indexOf(requiredVersion);
   if (introducedIdx >= 0 && declaredIdx >= introducedIdx) return;
 
+  const surfaceLabel = usesRewrittenActorSurface
+    ? 'event_driven (lifecycle: event_driven/onEvent/marketData/warmup)'
+    : 'lifecycle (конверт манифеста 083 E1)';
   issues.push(
     makeIssue(
       'unsupported_contract_version',
-      `конверт 083 E1 (lifecycle/onEvent) введён в contractVersion ` +
-        `"${EVENT_DRIVEN_MIN_CONTRACT_VERSION}"; манифест объявляет "${declared}"`,
+      `surface ${surfaceLabel} требует contractVersion ≥"${requiredVersion}"; манифест объявляет ` +
+        `"${declared}"`,
       '/contractVersion',
     ),
   );
@@ -327,6 +503,18 @@ export function validateModule(
     if (typeof manifest.interceptionPoint !== 'string' || manifest.interceptionPoint.length === 0) {
       issues.push(makeIssue('schema_invalid', 'overlay обязан указывать interceptionPoint', '/interceptionPoint'));
     }
+    // м-7 (раунд правок 2): marketData принадлежит форме event_driven — overlay перехватывает
+    // решение фазовой модели single_position и собственных требований к рыночным данным не имеет.
+    // Прецедент отклонения бессмысленных для формы полей — lifecycle_form_invalid (083 E1).
+    if (manifest.marketData !== undefined) {
+      issues.push(
+        makeIssue(
+          'lifecycle_form_invalid',
+          'overlay не может объявлять marketData — поле принадлежит форме event_driven, overlay перехватывает решение single_position',
+          '/marketData',
+        ),
+      );
+    }
   }
 
   // 5. params против author-supplied paramsSchema (FR-034). Отсутствие paramsSchema ловит шаг 1.
@@ -421,6 +609,21 @@ export function validateModule(
   if (Array.isArray(input.sampleDecisions)) {
     validateSampleDecisions(manifest, input.sampleDecisions, registry, issues);
   }
+
+  // 7. marketData (083 S1 задача 3): обязательность для event_driven + семантика scope/
+  // revisionPolicy/funding-form, которую схема не выражает (см. validateMarketDataRequirements).
+  const marketDataRaw: unknown = manifest.marketData;
+  const hasMarketData = Array.isArray(marketDataRaw) && marketDataRaw.length > 0;
+  if (manifest.kind === 'strategy' && lifecycleKnown && lifecycle === 'event_driven' && !hasMarketData) {
+    issues.push(
+      makeIssue(
+        'missing_market_data_requirement',
+        'форма event_driven обязана объявлять хотя бы одно требование marketData',
+        '/marketData',
+      ),
+    );
+  }
+  validateMarketDataRequirements(marketDataRaw, issues);
 
   const hasError = issues.some((i) => i.severity === 'error');
   return assemble(issues, hasError ? undefined : normalizeManifest(manifest));

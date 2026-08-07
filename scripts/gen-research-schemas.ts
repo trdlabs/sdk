@@ -72,6 +72,95 @@ function relaxDataNeedsAdditionalProps(schema: Schema): void {
   (dn as Record<string, unknown>).additionalProperties = { type: 'boolean' };
 }
 
+/**
+ * 083 S1, финальная волна ревью ветки (Б-4) — числовые ограничения, которых TS-тип не выражает, а
+ * дока обещает.
+ *
+ * Проблема была ровно в разрыве между двумя: `TimestampUs`/`DurationUs` — бранд-типы над `number`,
+ * их JSDoc говорит «целое, неотрицательное, safe-integer», рантайм-конструкторы (`timestampUs`,
+ * `durationUs`, `time-us.ts`) это проверяют, а генератор выдавал `{"type":"number"}` — то есть
+ * схема, единственный гейт НА ГРАНИЦЕ ИЗОЛЯТА, где рантайм-конструкторов нет вовсе, обещанного не
+ * требовала. Проверено ajv по схемам из `dist`: `timer.set` с `atTs: 1.5` и с `atTs: -1000`,
+ * `fill` с `ts: 1.5` и с `qty: -5`, `revision: -1.5` — ВСЕ валидны. Правило №7 задачи («гейт,
+ * полагающийся на типы вызывающего, гейтом не является») здесь нарушалось буквально: команда,
+ * пришедшая из недоверенного изолята, проходила схему с дробным моментом времени.
+ *
+ * Чинится В ГЕНЕРАТОРЕ, а не правкой JSON (схемы не редактируются руками — `--check` гейтит дрейф).
+ *
+ * ЧТО НЕ трогаем и почему (решение, а не пробел):
+ * - `price`/`stopPrice`/`fee`/`fundingRate` — контракт НЕ обещает про них ничего, кроме конечности
+ *   (`fee` законно отрицателен на maker-rebate, `fundingRate` — на инвертированном фандинге,
+ *   отрицательная цена наблюдалась на реальных фьючерсах). Схема, требующая больше доки, — тот же
+ *   разрыв, только в другую сторону.
+ * - `lookback`/`interval` в манифесте — их семантические границы уже проверяет `validate-module.ts`
+ *   СВОИМ кодом (`invalid_market_data_requirement`), и подмена его на generic `schema_invalid`
+ *   ухудшила бы диагностику (тот же довод, по которому существует `relaxDataNeedsAdditionalProps`
+ *   выше). Целочисленность `interval` при этом закрывается сама — через общий `DurationUs`.
+ */
+const NUMERIC_DEFINITION_CONSTRAINTS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  // Момент — целый неотрицательный (`isTimestampUs`).
+  TimestampUs: { type: 'integer', minimum: 0 },
+  // Длительность — целая; знак законен (разность моментов), поэтому только `integer`.
+  DurationUs: { type: 'integer' },
+};
+
+/**
+ * Числовые ограничения по ИМЕНИ свойства. Применяются к каждой подсхеме `properties`, но ТОЛЬКО
+ * если текущий узел — ровно `{"type":"number"}` (плюс `description`): так правка не может молча
+ * переписать поле, форма которого изменилась в типах, — новая форма просто не совпадёт с образцом
+ * и останется как есть, а расхождение поймает ревьюер, а не рантайм.
+ */
+const NUMERIC_PROPERTY_CONSTRAINTS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  // `ObservedValue.revision` — `isValidRevisionNumber` (observation-status.ts) требует целое ≥ 0.
+  revision: { type: 'integer', minimum: 0 },
+  // Количества: `ActorFillEvent.qty` («всегда положительный размер исполнения»),
+  // `ActorPlaceCommand.qtyUsd` («запрашиваемый нотионал») — ноль и отрицательное неисполнимы.
+  qty: { exclusiveMinimum: 0 },
+  qtyUsd: { exclusiveMinimum: 0 },
+  // Величины, про которые doc значений рыночных событий говорит `≥ 0`.
+  volume: { minimum: 0 },
+  oiTotalUsd: { minimum: 0 },
+  longUsd: { minimum: 0 },
+  shortUsd: { minimum: 0 },
+  buyUsd: { minimum: 0 },
+  sellUsd: { minimum: 0 },
+};
+
+/** Узел — ровно `{"type":"number"}` (с необязательным `description`)? */
+function isPlainNumberNode(node: unknown): node is Record<string, unknown> {
+  if (typeof node !== 'object' || node === null || Array.isArray(node)) return false;
+  const keys = Object.keys(node).filter((k) => k !== 'description');
+  return keys.length === 1 && keys[0] === 'type' && (node as Record<string, unknown>).type === 'number';
+}
+
+function tightenNumericConstraints(schema: Schema): void {
+  const root = schema as Record<string, unknown>;
+  const defs = root.definitions;
+  if (typeof defs === 'object' && defs !== null) {
+    for (const [name, constraint] of Object.entries(NUMERIC_DEFINITION_CONSTRAINTS)) {
+      const node = (defs as Record<string, unknown>)[name];
+      if (isPlainNumberNode(node)) Object.assign(node, constraint);
+    }
+  }
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== 'object' || node === null) return;
+    const record = node as Record<string, unknown>;
+    const props = record.properties;
+    if (typeof props === 'object' && props !== null && !Array.isArray(props)) {
+      for (const [name, child] of Object.entries(props as Record<string, unknown>)) {
+        const constraint = NUMERIC_PROPERTY_CONSTRAINTS[name];
+        if (constraint !== undefined && isPlainNumberNode(child)) Object.assign(child, constraint);
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  visit(root);
+}
+
 function generate(t: Target): Schema {
   const config: Config = {
     path: t.sourceFile,
@@ -87,6 +176,8 @@ function generate(t: Target): Schema {
   }
   // 023 — относится только к module-manifest (несёт подсхему DataNeedsDeclaration).
   if (t.type === 'ModuleManifest') relaxDataNeedsAdditionalProps(schema);
+  // 083 S1, финальная волна — числовые ограничения контракта во ВСЕХ схемах (см. doc выше).
+  tightenNumericConstraints(schema);
   return schema;
 }
 

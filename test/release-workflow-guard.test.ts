@@ -79,3 +79,20 @@ test('every gate runs before publish', () => {
     assert.ok(stepAt(gate) < publishAt, `${gate} must run before npm publish`);
   }
 });
+
+// `npm publish --provenance` exiting 0 does not prove the attestation was actually
+// minted (the OIDC exchange runs as a side effect and can fail silently — the real
+// incident this guards against happened in @trdlabs/engine). The registry must be asked
+// directly, and that ask must happen strictly between publish and the git tag/release
+// note: the tag promises a provenance-backed release and must not exist if the registry
+// cannot confirm one.
+test('provenance attestation gate runs after publish and before the git tag/release step', () => {
+  const publishAt = stepAt('npm publish --access public --provenance');
+  const attestAt = stepAt('npx tsx scripts/assert-provenance-attested.ts "@trdlabs/sdk" "$VERSION"');
+  const tagAt = workflow.indexOf('gh release create');
+  assert.ok(publishAt >= 0, 'no publish step found');
+  assert.ok(attestAt >= 0, 'provenance-attestation gate step not found');
+  assert.ok(tagAt >= 0, 'no git tag / release step found');
+  assert.ok(attestAt > publishAt, 'provenance-attestation gate must run after publish');
+  assert.ok(attestAt < tagAt, 'provenance-attestation gate must run before the git tag/release step');
+});

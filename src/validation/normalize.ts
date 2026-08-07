@@ -12,7 +12,12 @@ import type {
   PromotionRequest,
   ReviewDecision,
 } from '../research-contract/module.js';
-import { DEFAULT_STRATEGY_LIFECYCLE, type StrategyLifecycle } from '../research-contract/event-driven.js';
+import {
+  DEFAULT_STRATEGY_LIFECYCLE,
+  type ActorWarmupSource,
+  type MarketDataRequirement,
+  type StrategyLifecycle,
+} from '../research-contract/event-driven.js';
 import type { RealityModel, RealityModelSlotName } from '../research-contract/reality-model.js';
 import { REALITY_MODEL_SLOTS } from '../research-contract/reality-model.js';
 import type { BacktestRunRequest, Ref, RunPeriod } from '../research-contract/run.js';
@@ -56,6 +61,17 @@ export interface NormalizedManifest {
    * подстановка дефолта сдвинула бы проекции всех существующих модулей и их content-hash'и.
    */
   readonly lifecycle?: StrategyLifecycle;
+  /**
+   * 083 S1 задача 3 — объявленные `marketData`, только если заданы (та же дисциплина, что
+   * `lifecycle` выше): без явного переноса валидированные требования молча пропадали бы из
+   * проекции, которую видит downstream runner.
+   */
+  readonly marketData?: readonly MarketDataRequirement[];
+  /**
+   * 083 S1 задача 3 (раунд правок 2, С-2) — объявленный `warmup`, только если задан (та же
+   * дисциплина, что `marketData`/`lifecycle` выше).
+   */
+  readonly warmup?: ActorWarmupSource;
 }
 
 function declaredFlags(
@@ -99,9 +115,11 @@ export function normalizeManifest(manifest: ModuleManifest): NormalizedManifest 
           interceptionPoint: manifest.interceptionPoint,
         }
       : base;
-  return manifest.lifecycle !== undefined
-    ? { ...withKind, lifecycle: manifest.lifecycle }
-    : withKind;
+  const withLifecycle: NormalizedManifest =
+    manifest.lifecycle !== undefined ? { ...withKind, lifecycle: manifest.lifecycle } : withKind;
+  const withMarketData: NormalizedManifest =
+    manifest.marketData !== undefined ? { ...withLifecycle, marketData: manifest.marketData } : withLifecycle;
+  return manifest.warmup !== undefined ? { ...withMarketData, warmup: manifest.warmup } : withMarketData;
 }
 
 /**

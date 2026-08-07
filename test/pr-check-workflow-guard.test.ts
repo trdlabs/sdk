@@ -176,3 +176,22 @@ test('pr-check runs the Node major the release publishes from', () => {
   assert.ok(prNode, 'pr-check pins no node-version');
   assert.equal(prNode, nodeOf(release), 'pr-check and sdk-release must run the same Node major');
 });
+
+test('npm test does not use --test-force-exit — a truncated run must not read as green', () => {
+  // 083 S1, финальная волна ревью ветки. `--test-force-exit` стоял в `npm test` с P2-12 (коммит
+  // 952601f, вместе с historical-client.test.ts) и НЕДЕТЕРМИНИРОВАННО обрывал хвост отчёта: замер
+  // здесь же — 8 прогонов под флагом дали 269/269/262/269/269 и отдельно 249 и 257 subtest'ов, и
+  // КАЖДЫЙ раз итог был `fail 0`. Пропадал всегда хвост одного файла (`actor-state-ledger.test.ts`),
+  // то есть отказ в этих тестах был бы невидим — `npm run check` отвечал бы «зелено», не прогнав их.
+  // Без флага: 8 прогонов подряд по 269 subtest'ов, код выхода 0 каждый раз (процесс завершается
+  // сам — проверено и на historical-client.test.ts отдельно, ради которого флаг заводили).
+  //
+  // Гейт, который молча пропускает часть проверок и всё равно говорит «зелено», — тот же класс, что
+  // эта ветка чинила весь S1; здесь он стоял под самим механизмом проверки.
+  assert.ok(pkg.scripts.test, 'no test script');
+  assert.doesNotMatch(
+    pkg.scripts.test,
+    /--test-force-exit/,
+    'npm test обрывает отчёт под --test-force-exit и всё равно рапортует fail 0',
+  );
+});

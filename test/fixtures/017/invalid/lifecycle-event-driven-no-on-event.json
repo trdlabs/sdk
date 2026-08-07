@@ -7,7 +7,7 @@
     "summary": "Объявляет форму актора без единственной точки входа onEvent",
     "rationale": "Негативная фикстура: форма event_driven без onEvent неисполнима.",
     "author": "agent",
-    "contractVersion": "017.3",
+    "contractVersion": "017.4",
     "status": "research_only",
     "lifecycle": "event_driven",
     "paramsSchema": { "type": "object", "additionalProperties": false, "properties": {} },

@@ -7,7 +7,7 @@
     "summary": "Сетка лимиток вокруг цены с переставлением по таймеру",
     "rationale": "Order-flow-логика невыразима в позиционных решениях: нужны place/cancel и таймеры.",
     "author": "agent",
-    "contractVersion": "017.3",
+    "contractVersion": "017.4",
     "status": "research_only",
     "lifecycle": "event_driven",
     "paramsSchema": {
@@ -22,6 +22,17 @@
     "params": { "levels": 4, "stepPct": 0.25 },
     "capabilities": { "platformSdk": true },
     "dataNeeds": { "closedCandlesUpToCurrent": true },
-    "hooks": ["init", "onEvent", "dispose"]
+    "hooks": ["init", "onEvent", "dispose"],
+    "marketData": [
+      {
+        "kind": "candles",
+        "id": "req-candles",
+        "instrument": { "venue": "binance", "symbol": "BTCUSDT" },
+        "interval": 60000000,
+        "lookback": 200,
+        "revisionPolicy": { "mode": "final_only" },
+        "priceType": "trade"
+      }
+    ]
   }
 }

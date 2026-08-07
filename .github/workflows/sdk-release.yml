@@ -93,6 +93,23 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # `npm publish --provenance` exiting 0 is NOT evidence the provenance attestation
+      # was actually generated: the attestation is minted by a GitHub OIDC exchange that
+      # runs as a SIDE EFFECT of publish, and a failed exchange does not fail the publish
+      # command itself. This is not hypothetical — it happened for real in the sibling
+      # package `@trdlabs/engine`: the publish step logged success, attestations silently
+      # never generated, and it surfaced only after the release had already shipped. The
+      # npm registry is immutable per version, so the only available fix was forward, as
+      # a new version — there is no way to repair the one that shipped. This step asks
+      # the REGISTRY, not the previous step's log, whether this exact just-published
+      # version carries `dist.attestations`, and fails closed (non-zero exit) on a
+      # confirmed absence OR on any indeterminate registry/network answer — same
+      # fail-closed discipline as scripts/assert-version-publishable.ts above. It must
+      # run before the git tag / release note below: that tag promises a provenance-
+      # backed release, and must not exist if provenance does not.
+      - name: Fail closed unless npm confirms provenance attestations for this version
+        run: npx tsx scripts/assert-provenance-attested.ts "@trdlabs/sdk" "$VERSION"
+
       # ── Secondary GitHub release NOTE (after successful npm publish) ────────
       # Not a delivery channel: no package asset is attached. Consumers install
       # from npm. This only records a human-readable release note + git tag.
