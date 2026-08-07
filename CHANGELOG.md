@@ -13,6 +13,8 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-07
+
 ### 083 S1 — `event_driven` actor contract rewritten (SDK only; runtimes untouched)
 
 Rewrites the `event_driven` kernel contract E1 that shipped in `0.13.0` under `CONTRACT_VERSION
@@ -632,7 +634,8 @@ tag sequence jumps 0.9.3 → 0.9.5.
   conformance harness. Added Apache-2.0 license, README, publish allowlist gate,
   and the sdk-release workflow.
 
-[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.13.0...HEAD
+[Unreleased]: https://github.com/trdlabs/sdk/compare/sdk-v0.14.0...HEAD
+[0.14.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.14.0
 [0.13.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.13.0
 [0.11.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.11.0
 [0.10.0]: https://www.npmjs.com/package/@trdlabs/sdk/v/0.10.0
