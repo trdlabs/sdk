@@ -2,10 +2,19 @@
 // `dist.attestations` (url + provenance.predicateType) is "attested"; a clean registry
 // answer with no attestations, or ANY indeterminate registry/network/parse outcome, must
 // NOT be treated as attested.
+//
+// Also guards the bounded retry added after the live 0.14.0 release (registry replication
+// lag right after publish is a transient `indeterminate`, not a terminal one — see the
+// header comment in scripts/assert-provenance-attested.ts): retries ONLY `indeterminate`,
+// never `missing`, and stops (fail-closed) once the attempt budget is exhausted.
 // Run: npx tsx --test test/assert-provenance-attested.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyAttestations } from '../scripts/assert-provenance-attested.js';
+import {
+  classifyAttestations,
+  resolveAttestationOutcome,
+  type AttestationOutcome,
+} from '../scripts/assert-provenance-attested.js';
 
 test('confirmed attestations (url + predicateType present) is attested', () => {
   assert.equal(
@@ -107,4 +116,114 @@ test('status 0 but non-JSON stdout is indeterminate (cannot read the claim)', ()
     classifyAttestations({ status: 0, stdout: 'npm WARN using --force\nnot json', stderr: '' }),
     'indeterminate',
   );
+});
+
+test('status 0 but stdout is the literal JSON `null` is indeterminate, not a thrown exception', () => {
+  // `JSON.parse('null')` succeeds and yields `null` — a non-object. Reading `.attestations`
+  // off of it must not throw a TypeError out of the classifier; it must resolve to
+  // `indeterminate` deliberately, the same as any other unreadable claim.
+  assert.equal(classifyAttestations({ status: 0, stdout: 'null', stderr: '' }), 'indeterminate');
+});
+
+// ── resolveAttestationOutcome: bounded retry on `indeterminate` only ──────────────────────
+
+/** Builds a `check` stub that returns each outcome in `sequence` in order, then throws if
+ *  called more times than the sequence provides (catches "retried when it shouldn't have"). */
+function scriptedCheck(sequence: readonly AttestationOutcome[]): {
+  readonly check: () => AttestationOutcome;
+  readonly callCount: () => number;
+} {
+  let calls = 0;
+  return {
+    check: () => {
+      if (calls >= sequence.length) {
+        throw new Error(`check() called more times (${calls + 1}) than scripted (${sequence.length})`);
+      }
+      const outcome = sequence[calls];
+      calls += 1;
+      return outcome as AttestationOutcome;
+    },
+    callCount: () => calls,
+  };
+}
+
+/** No-op sleep that resolves immediately — the retry logic is tested for call count and
+ *  sequencing, never for real elapsed time. */
+function instantSleep(calls: number[]): (ms: number) => Promise<void> {
+  return (ms: number) => {
+    calls.push(ms);
+    return Promise.resolve();
+  };
+}
+
+test('indeterminate, indeterminate, attested succeeds on the third attempt', async () => {
+  const { check, callCount } = scriptedCheck(['indeterminate', 'indeterminate', 'attested']);
+  const sleeps: number[] = [];
+  const logs: string[] = [];
+  const result = await resolveAttestationOutcome(check, {
+    maxAttempts: 5,
+    delayMs: 3000,
+    sleep: instantSleep(sleeps),
+    log: (m) => logs.push(m),
+  });
+  assert.deepEqual(result, { outcome: 'attested', attempts: 3 });
+  assert.equal(callCount(), 3, 'check() must be called exactly once per attempt, no more');
+  assert.deepEqual(sleeps, [3000, 3000], 'must sleep between attempts only, never after the last');
+  assert.equal(logs.length, 2, 'each retried attempt logs why it is retrying');
+});
+
+test('indeterminate on every attempt exhausts the budget and fails closed', async () => {
+  const { check, callCount } = scriptedCheck([
+    'indeterminate',
+    'indeterminate',
+    'indeterminate',
+    'indeterminate',
+    'indeterminate',
+  ]);
+  const sleeps: number[] = [];
+  const logs: string[] = [];
+  const result = await resolveAttestationOutcome(check, {
+    maxAttempts: 5,
+    delayMs: 3000,
+    sleep: instantSleep(sleeps),
+    log: (m) => logs.push(m),
+  });
+  assert.deepEqual(result, { outcome: 'indeterminate', attempts: 5 });
+  assert.equal(callCount(), 5, 'must stop at exactly maxAttempts, not loop forever');
+  assert.equal(sleeps.length, 4, 'sleeps between attempts only: 5 attempts → 4 gaps');
+  assert.match(
+    logs.at(-1) ?? '',
+    /exhausted/,
+    'the final log line must say the budget was exhausted, distinguishing it from a missing-short-circuit failure',
+  );
+});
+
+test('missing on the first attempt fails closed WITHOUT any retry (no extra calls, no sleep)', async () => {
+  const { check, callCount } = scriptedCheck(['missing']);
+  const sleeps: number[] = [];
+  const logs: string[] = [];
+  const result = await resolveAttestationOutcome(check, {
+    maxAttempts: 5,
+    delayMs: 3000,
+    sleep: instantSleep(sleeps),
+    log: (m) => logs.push(m),
+  });
+  assert.deepEqual(result, { outcome: 'missing', attempts: 1 });
+  assert.equal(callCount(), 1, 'a confirmed "missing" must not trigger a second check() call');
+  assert.deepEqual(sleeps, [], 'a confirmed "missing" must never sleep/retry');
+  assert.deepEqual(logs, [], 'a confirmed "missing" is not a retry — nothing to log about retrying');
+});
+
+test('attested on the first attempt succeeds WITHOUT any retry', async () => {
+  const { check, callCount } = scriptedCheck(['attested']);
+  const sleeps: number[] = [];
+  const result = await resolveAttestationOutcome(check, {
+    maxAttempts: 5,
+    delayMs: 3000,
+    sleep: instantSleep(sleeps),
+    log: () => {},
+  });
+  assert.deepEqual(result, { outcome: 'attested', attempts: 1 });
+  assert.equal(callCount(), 1);
+  assert.deepEqual(sleeps, []);
 });
