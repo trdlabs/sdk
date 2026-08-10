@@ -238,6 +238,35 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
+/**
+ * Renders the diagnostic for an UNEXPECTED throw (anything that escapes `main` rather than being
+ * classified by it) and returns the exit code.
+ *
+ * Same discipline as the `dist === null` guard above, applied one level out: an unexpected throw
+ * must fail closed BY DESIGN, not by accident of runtime semantics. Node's default handling of an
+ * unhandled rejection does exit non-zero today — but that is the runtime's policy, not this
+ * script's decision, and it prints a bare stack trace where the release log needs the same
+ * `::error::` annotation the other two failure paths emit. This is precisely the shape this file
+ * already refused to accept for `dist.attestations` off of `null`; leaving it at the entrypoint
+ * would keep exactly one path whose exit code is incidental.
+ *
+ * Split out of the entrypoint below (rather than inlined in a `.catch`) so the contract is
+ * ASSERTED rather than trusted: the entrypoint is guarded by `import.meta.url` and can never be
+ * exercised from the test suite, so an inline handler would be an untestable claim.
+ */
+export function reportUnexpectedFailure(err: unknown, log: (message: string) => void): number {
+  log(
+    `::error::provenance gate threw before it could classify attestation status: ` +
+      `${err instanceof Error ? err.message : String(err)}. Failing closed instead of ` +
+      `tagging/releasing on an unverified state.`,
+  );
+  return 1;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err: unknown) =>
+      process.exit(reportUnexpectedFailure(err, (message) => console.error(message))),
+    );
 }

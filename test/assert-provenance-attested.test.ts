@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyAttestations,
+  reportUnexpectedFailure,
   resolveAttestationOutcome,
   type AttestationOutcome,
 } from '../scripts/assert-provenance-attested.js';
@@ -226,4 +227,29 @@ test('attested on the first attempt succeeds WITHOUT any retry', async () => {
   assert.deepEqual(result, { outcome: 'attested', attempts: 1 });
   assert.equal(callCount(), 1);
   assert.deepEqual(sleeps, []);
+});
+
+// ── Unexpected throw at the entrypoint ────────────────────────────────────────────────
+// Nothing in `main` is EXPECTED to throw — every registry answer it can read is classified.
+// These pin the behaviour when something does anyway (a spawn that cannot even start, a
+// future edit that adds a throwing path): the gate must fail closed with the same
+// `::error::` annotation as its other two failure paths, by decision rather than by Node's
+// default unhandled-rejection policy.
+
+test('an unexpected Error fails closed with an ::error:: diagnostic naming the cause', () => {
+  const logs: string[] = [];
+  const code = reportUnexpectedFailure(new Error('spawnSync ENOENT'), (m) => logs.push(m));
+  assert.equal(code, 1, 'an unexpected throw must never yield a passing exit code');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? '', /^::error::/, 'the release log needs the annotation, not a stack trace');
+  assert.match(logs[0] ?? '', /spawnSync ENOENT/, 'the cause must survive into the diagnostic');
+});
+
+test('a non-Error throw still fails closed and still names what was thrown', () => {
+  // `throw 'string'` / `throw {code: …}` are legal JS; `err.message` would be `undefined` and
+  // silently erase the cause, so the String() fallback is the load-bearing half of the branch.
+  const logs: string[] = [];
+  const code = reportUnexpectedFailure('registry exploded', (m) => logs.push(m));
+  assert.equal(code, 1);
+  assert.match(logs[0] ?? '', /registry exploded/);
 });
