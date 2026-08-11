@@ -66,7 +66,17 @@ npm is canonical. A release is an `npm publish`, not a GitHub artifact.
 
 ## Versioning
 
-Current: **0.14.0**. See [CHANGELOG.md](CHANGELOG.md) for release history.
+The current version is whatever the registry serves — `npm view @trdlabs/sdk version`,
+or the badge on [npmjs.com/package/@trdlabs/sdk](https://www.npmjs.com/package/@trdlabs/sdk).
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
+> This line used to read `Current: 0.14.0`. A version number written by hand into
+> a file that **ships inside the tarball** has exactly one future: it goes stale
+> at the next release and then misinforms every reader who trusts it — and it is
+> published, so it misinforms them from the registry itself. The registry already
+> answers this question and cannot disagree with itself. Removed rather than
+> gated: a gate would be a second thing to keep in sync, which is the same class
+> of defect one level up.
 
 SDK package versions follow semver. Contract compatibility is surfaced through
 the exported version constants for each contract area.

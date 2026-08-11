@@ -15,6 +15,7 @@
 // Run: npx tsx --test test/validation-taxonomy.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Ajv } from 'ajv';
 
 import { ALL_VALIDATION_CODES, CODE_SEVERITY, schemaAsset } from '../src/validation/index.js';
 import { severityOf } from '../src/validation/codes.js';
@@ -63,22 +64,55 @@ test('unsupported_lifecycle — НЕ то же, что lifecycle_form_invalid', 
   assert.notEqual('unsupported_lifecycle', 'lifecycle_form_invalid');
 });
 
-test('пустой JSON Pointer — законный путь и означает документ целиком', () => {
+/** Тот же AJV, что и в `schema-registry.ts`: гейт на другой конфигурации гейтит не то. */
+function validateAgainst(schema: object, doc: unknown): { valid: boolean; errors: string } {
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  const fn = ajv.compile(schema);
+  const valid = fn(doc) === true;
+  return { valid, errors: JSON.stringify(fn.errors ?? []) };
+}
+
+/** Результат валидации с одной причиной под заданным путём. */
+const resultWithPath = (path: string): unknown => ({
+  status: 'rejected',
+  issues: [
+    {
+      severity: 'error',
+      code: 'unsupported_lifecycle',
+      message: 'lifecycle: event_driven объявлен, но исполнение здесь не разрешено',
+      path,
+    } satisfies ValidationIssue,
+  ],
+});
+
+test("пустой JSON Pointer проходит НАСТОЯЩУЮ валидацию по схеме", () => {
   // RFC 6901 §5: пустая строка ссылается на весь документ. Для причины, у которой нарушающего УЗЛА
   // нет (запрос корректен, не совпадает окружение), это единственный честный указатель.
-  const issue: ValidationIssue = {
-    severity: 'error',
-    code: 'unsupported_lifecycle',
-    message: 'lifecycle: event_driven объявлен, но исполнение здесь не разрешено',
-    path: '',
-  };
-  assert.equal(issue.path, '');
+  //
+  // ПЕРВАЯ РЕДАКЦИЯ ЭТОЙ ПРОВЕРКИ БЫЛА ПРОКСИ, а не валидацией: она искала в тексте схемы
+  // отсутствие `"minLength": 1`. Мимо неё прошёл бы `pattern: "^/"` — ограничение, которое пустую
+  // строку отвергает ровно так же, а подстроки `minLength` не содержит. Проверять надо тем же
+  // способом, которым схему применяет потребитель, а не догадкой о её тексте.
+  const out = validateAgainst(schemaAsset('validation-result'), resultWithPath(''));
+  assert.equal(out.valid, true, out.errors);
+});
 
-  // Схема обязана принимать такой issue: `path` — строка и остаётся ОБЯЗАТЕЛЬНОЙ. Если бы схема
-  // требовала непустую строку или паттерн `^/`, честного пути для этой причины не существовало бы
-  // вовсе, и автор кода вынужденно указал бы валидный узел — то есть соврал бы.
-  const asText = JSON.stringify(schemaAsset('validation-result'));
-  assert.ok(!asText.includes('"minLength": 1'), 'схема не должна запрещать пустой path');
+test('проверка НЕ вакуумна: pattern "^/" в схеме отвергает тот же документ', () => {
+  // Негативный контроль живёт В НАБОРЕ, а не в ручной мутационной пробе, которую надо помнить
+  // запустить. Если завтра кто-то добавит в схему ограничение пути, тест выше упадёт — а этот
+  // докажет, что упал он по делу, а не от поломки самой проверки.
+  const mutated = structuredClone(schemaAsset('validation-result')) as {
+    definitions: { ValidationIssue: { properties: { path: Record<string, unknown> } } };
+  };
+  mutated.definitions.ValidationIssue.properties.path.pattern = '^/';
+
+  const empty = validateAgainst(mutated as unknown as object, resultWithPath(''));
+  assert.equal(empty.valid, false, 'мутированная схема обязана отвергать пустой путь');
+
+  // И бьёт мутация ИМЕННО по пустой строке: непустой указатель через неё проходит. Без этого
+  // «отвергает» могло бы означать «отвергает всё подряд», и контроль ничего бы не доказывал.
+  const nonEmpty = validateAgainst(mutated as unknown as object, resultWithPath('/moduleRef'));
+  assert.equal(nonEmpty.valid, true, nonEmpty.errors);
 });
 
 test('поле path остаётся ОБЯЗАТЕЛЬНЫМ — второго способа сказать «узла нет» не заводим', () => {
