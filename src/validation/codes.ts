@@ -43,6 +43,7 @@ export const CODE_SEVERITY: Readonly<Record<ValidationCode, Severity>> = {
   observation_revision_start_invalid: 'error',
   observation_finality_demoted: 'error',
   observation_archive_row_corrupt: 'error',
+  unsupported_lifecycle: 'error',
   empty_baseline_variant_diff: 'warning',
 };
 
