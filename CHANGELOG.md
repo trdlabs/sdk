@@ -13,6 +13,56 @@ pre-public early entries (0.4.0–0.5.0) are summarised from their release commi
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-11
+
+### 083 S3 — `unsupported_lifecycle`, and the empty JSON Pointer made normative
+
+`CONTRACT_VERSION` stays `017.4`. Nothing about what a manifest may *declare* changes here; what
+changes is what a **validator may emit**. Manifests, the manifest schema, and every runtime that
+validates them are untouched.
+
+### Added
+
+- `validation`: **`unsupported_lifecycle`** (error) — the host cannot execute the *declared* shape of
+  a strategy. Deliberately distinct from `lifecycle_form_invalid`, and the difference is *whose
+  problem it is*: `lifecycle_form_invalid` means the manifest contradicts itself (declared shape vs
+  the hook set) and the author must fix it; `unsupported_lifecycle` means the manifest is flawless
+  and the environment does not match — rollout is not permitted here, the host's execution mode is
+  incompatible with the declared shape, or the executor lacks the capability. Those are fixed by
+  different people, so a consumer switching on the code must be able to tell them apart.
+
+  Deliberately **not** `invalid_module_ref`: the ref resolves fine, and reporting it would send an
+  author to fix something that is not broken.
+
+### Changed
+
+- `research-contract`: `ValidationIssue.path` — the empty JSON Pointer `''` is now stated as
+  **normative** for "the document as a whole" (RFC 6901 §5) rather than an aside in a one-line
+  comment. It is the correct pointer for a cause with **no offending node**: `unsupported_lifecycle`
+  arises from a valid request meeting an environment that cannot run it, and pointing at a valid node
+  would be a lie with a plausible shape.
+
+  `path` stays **required**. Allowing it to be omitted would create a second way to say "no node",
+  and consumers would have to distinguish `undefined` from `''` — which mean the same thing.
+
+  Doc-only for the type; the generated `validation-result` schema picks up the wording, and its
+  `path` remains an unconstrained required string, so `''` was already accepted and still is.
+
+### Migration
+
+Additive to a closed taxonomy, and that is not free for everyone: a consumer that switches
+**exhaustively** over `ValidationCode`, or builds a `Record<ValidationCode, …>`, gets a compile error
+until it adds the new arm. That is the intended failure — it is how the consumer learns a new
+rejection reason exists. Consumers that read `code` as a plain string are unaffected.
+
+### Tests
+
+- `test/validation-taxonomy.test.ts` — the runtime taxonomy and the schema enum must agree, in both
+  directions. Each pair among the three homes of a code is already coupled by its own mechanism (the
+  `Record<ValidationCode, Severity>` type; `gen-research-schemas --check` inside `npm run build`), but
+  both are implementations and both are weakenable by a single edit. This test asserts the
+  *property*, which survives a change of implementation.
+
 ## [0.14.0] - 2026-08-07
 
 ### 083 S1 — `event_driven` actor contract rewritten (SDK only; runtimes untouched)
