@@ -18,5 +18,24 @@ export type {
   CanonicalRowV2Field,
 } from './canonical-row.js';
 
-// Generic historical.2 HTTP client (discover/coverage/queryRows).
+// Generic historical.2 HTTP client (discover/coverage/preflight/queryRows).
 export * from './client.js';
+
+// Д3 (3.3б) — доступный интервал бэктеста и допуск окна: четыре состояния
+// индекса и пять различимых кодов отказа.
+export {
+  AVAILABILITY_STATES,
+  PREFLIGHT_REJECT_CODES,
+  PREFLIGHT_STATUS_BY_CODE,
+  classifyPreflightResponse,
+  isPreflightRejectCode,
+  parseAvailabilityDescriptor,
+} from './availability.js';
+
+export type {
+  HistoricalAvailability,
+  PreflightRejectCode,
+  PreflightResult,
+  PreflightSuccess,
+  PreflightReject,
+} from './availability.js';
