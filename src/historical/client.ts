@@ -17,6 +17,12 @@
 // repeated cursor and enforces max pages/rows fail-closed so an echoing upstream can't loop forever or
 // exhaust memory. HTTP failures keep the `HTTP <status>` message so message-based classifiers still work.
 
+import {
+  classifyPreflightResponse,
+  parseAvailabilityDescriptor,
+  type HistoricalAvailability,
+  type PreflightResult,
+} from './availability.js';
 import type { CanonicalRowV2 } from './canonical-row.js';
 
 type FetchLike = typeof globalThis.fetch;
@@ -222,6 +228,55 @@ export class HistoricalClient {
       undefined,
       true,
     ))!;
+  }
+
+  /**
+   * Д3 (3.3б) — состояние индекса доступности из `/historical/discover`.
+   *
+   * Возвращает union четырёх состояний, а не «интервал или null»: `empty`,
+   * `not_initialized` и `invalid` описывают ТРИ разные причины отсутствия
+   * данных, и потребитель, схлопнувший их в одну, не отличит пустой архив от
+   * ненастроенного сервиса, а тот — от испорченного индекса.
+   */
+  async availability(): Promise<HistoricalAvailability> {
+    const d = await this.discover();
+    return parseAvailabilityDescriptor((d as Record<string, unknown>)['availability']);
+  }
+
+  /**
+   * Д3 (3.3б) — допуск окна: `GET /historical/preflight`.
+   *
+   * Возвращает РАЗЛИЧИМЫЙ результат, а не бросает одно исключение на все отказы.
+   * Успех бывает только у `ready`; `empty`, `not_initialized` и `invalid` дают
+   * три разных кода, потому что действия по ним разные: ждать первого закрытого
+   * дня, доделать выкатку, чинить индекс.
+   *
+   * КЛАССИФИКАЦИЯ ИДЁТ ПО ТОЧНОЙ ТРОЙКЕ: статус + код + форма тела. Знакомый
+   * код с чужим статусом или в повреждённом теле результатом допуска НЕ
+   * считается: так отвечает прокси, балансировщик или страница ошибки, а не наш
+   * сервис. Приняв это за отказ, клиент отключил бы повтор ровно там, где
+   * повтор и нужен.
+   *
+   * Отказ допуска не ретраится, хотя часть приезжает с 503. Это ЛОКАЛЬНОЕ
+   * свойство ОДНОГО вызова, а не утверждение, что состояние вечно:
+   * `not_initialized` кончится выкаткой, `invalid` — починкой индекса, и
+   * следующий вызов после изменения состояния совершенно законен. Не
+   * повторяется лишь та же попытка в тех же условиях — она дала бы тот же
+   * ответ и потеряла бы по дороге код.
+   */
+  async preflight(fromMs: number, toMs: number): Promise<PreflightResult> {
+    const params = new URLSearchParams({ fromMs: String(fromMs), toMs: String(toMs) });
+    const url = `${this.base}/historical/preflight?${params.toString()}`;
+    const res = await this.r.fetchImpl(url, {});
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      // Тело не разобралось — значит это не результат допуска. Ниже общий путь.
+    }
+    const classified = classifyPreflightResponse(res.status, body);
+    if (classified !== null) return classified;
+    throw new Error(`platform /historical/preflight: HTTP ${res.status}`);
   }
 
   /** GET /historical/coverage — per-(symbol,timeframe) availability snapshot. */

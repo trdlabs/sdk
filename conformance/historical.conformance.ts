@@ -62,6 +62,104 @@ async function drainRows(
   return { items, pages };
 }
 
+// ── Д3 (3.3б): доступный интервал и допуск окна ──────────────────────────────
+//
+// БУКВАЛЬНОЕ равенство real и mock достигается не сравнением двух живых
+// серверов, а тем, что ОБА сверяются с одной таблицей ожиданий, которая живёт
+// здесь. Совпасть с ней порознь — то же, что совпасть друг с другом, но
+// проверяется каждой стороной у себя и не требует поднимать два бэкенда разом.
+//
+// Таблица выписана РУКАМИ. Возьми её из платформенной реализации — и харнесс
+// краснел бы только вместе с ней, доказывая совпадение реализации с самой собой.
+
+/** Состояние индекса, в которое вызывающий привёл цель перед прогоном. */
+export type AvailabilityScenario = 'ready' | 'empty' | 'not_initialized' | 'invalid';
+
+/** Статус и код отказа preflight для каждого состояния. Пять кодов, не один. */
+export const PREFLIGHT_CONTRACT: Readonly<Record<AvailabilityScenario, { status: number; code: string | null }>> = {
+  ready: { status: 200, code: null },
+  empty: { status: 409, code: 'AVAILABILITY_EMPTY' },
+  not_initialized: { status: 503, code: 'AVAILABILITY_NOT_INITIALIZED' },
+  invalid: { status: 503, code: 'AVAILABILITY_INVALID' },
+};
+
+/** Точный набор полей успешного допуска. Лишнее поле — тоже расхождение. */
+export const PREFLIGHT_SUCCESS_KEYS = [
+  'archiveId', 'asOfMs', 'availabilityId', 'availableFromMs', 'availableToMs', 'clamped',
+  'datasetId', 'earliestAvailableDay', 'effectiveFromMs', 'effectiveToMs',
+  'lastContiguousClosedDay', 'ok', 'requestedFromMs', 'requestedToMs',
+] as const;
+
+/** Точный набор полей отказа. */
+export const PREFLIGHT_REJECT_KEYS = ['availabilityState', 'code', 'message', 'ok'] as const;
+
+const keysOf = (o: unknown): string[] => Object.keys((o ?? {}) as Record<string, unknown>).sort();
+
+/**
+ * Сверка контракта доступности для цели, приведённой в состояние `scenario`.
+ *
+ * Вызывающий обязан САМ привести цель в это состояние — харнесс проверяет, что
+ * состояние наблюдаемо и что допуск ведёт себя ровно так, как записано в
+ * таблице выше.
+ */
+export async function runAvailabilityConformance(
+  t: HistoricalConformanceTarget,
+  scenario: AvailabilityScenario,
+): Promise<{ ok: true }> {
+  const d = await getJson(t, '/historical/discover');
+  assert(d.status === 200, `availability: discover status ${d.status}`);
+  assert(
+    d.body?.availability?.state === scenario,
+    `availability: discover сообщает ${JSON.stringify(d.body?.availability?.state)}, ожидалось ${scenario}`,
+  );
+
+  const expected = PREFLIGHT_CONTRACT[scenario];
+  // Окно заведомо широкое: при `ready` оно обрежется, при остальных состояниях
+  // до обрезки дело не дойдёт вовсе.
+  const pre = await getJson(t, '/historical/preflight?fromMs=0&toMs=9999999999999');
+  assert(pre.status === expected.status, `preflight[${scenario}]: status ${pre.status}, ожидался ${expected.status}`);
+
+  if (expected.code === null) {
+    assert(pre.body?.ok === true, `preflight[${scenario}]: ok !== true`);
+    assert(
+      JSON.stringify(keysOf(pre.body)) === JSON.stringify([...PREFLIGHT_SUCCESS_KEYS].sort()),
+      `preflight[ready]: набор полей ${keysOf(pre.body).join(',')}`,
+    );
+    assert(pre.body.clamped === true, 'preflight[ready]: заведомо широкое окно обязано быть обрезано');
+    assert(
+      pre.body.requestedFromMs === 0 && pre.body.requestedToMs === 9999999999999,
+      'preflight[ready]: запрошенное окно обязано вернуться КАК БЫЛО',
+    );
+    assert(
+      pre.body.effectiveFromMs >= pre.body.availableFromMs && pre.body.effectiveToMs <= pre.body.availableToMs,
+      'preflight[ready]: фактическое окно вне доступного',
+    );
+    assert(/^sha256:[0-9a-f]{64}$/.test(String(pre.body.availabilityId)), 'preflight[ready]: availabilityId не содержательный');
+
+    // Пустое пересечение — ОТКАЗ, а не успешный пустой ответ.
+    const after = pre.body.availableToMs + 1;
+    const out = await getJson(t, `/historical/preflight?fromMs=${after}&toMs=${after + 1000}`);
+    assert(out.status === 409, `preflight[ready]: окно за границей дало ${out.status}, ожидался 409`);
+    assert(out.body?.code === 'WINDOW_OUTSIDE_AVAILABLE', `preflight[ready]: код ${out.body?.code}`);
+  } else {
+    assert(pre.body?.ok === false, `preflight[${scenario}]: ok !== false`);
+    assert(pre.body?.code === expected.code, `preflight[${scenario}]: код ${pre.body?.code}, ожидался ${expected.code}`);
+    assert(pre.body?.availabilityState === scenario, `preflight[${scenario}]: availabilityState ${pre.body?.availabilityState}`);
+    assert(
+      JSON.stringify(keysOf(pre.body)) === JSON.stringify([...PREFLIGHT_REJECT_KEYS].sort()),
+      `preflight[${scenario}]: набор полей ${keysOf(pre.body).join(',')}`,
+    );
+  }
+
+  // Кривое окно — это про ЗАПРОС, и отвечает 400 в ЛЮБОМ состоянии индекса.
+  // Иначе клиент с опечаткой в дате получал бы отказ про незавершённую выкатку.
+  const bad = await getJson(t, '/historical/preflight?fromMs=нет&toMs=тоже');
+  assert(bad.status === 400, `preflight[${scenario}]: кривое окно дало ${bad.status}, ожидался 400`);
+  assert(bad.body?.code === 'WINDOW_MALFORMED', `preflight[${scenario}]: код кривого окна ${bad.body?.code}`);
+
+  return { ok: true };
+}
+
 export async function runHistoricalConformance(
   t: HistoricalConformanceTarget,
   opts: {
