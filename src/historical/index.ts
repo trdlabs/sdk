@@ -39,3 +39,15 @@ export type {
   PreflightSuccess,
   PreflightReject,
 } from './availability.js';
+
+// Д3 — целостность ключа дня: типизированный отказ вместо голого `HTTP 409`.
+// Под 409 у `/historical/rows` живут два разных факта, и действия по ним
+// противоположны — перечитать с начала против «перечитывать бессмысленно».
+export {
+  DAY_INTEGRITY_CODE,
+  DAY_INTEGRITY_STATUS,
+  HistoricalDayIntegrityError,
+  classifyDayIntegrityResponse,
+} from './day-integrity.js';
+
+export type { DayIntegrityViolation } from './day-integrity.js';

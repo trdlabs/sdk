@@ -160,6 +160,100 @@ export async function runAvailabilityConformance(
   return { ok: true };
 }
 
+// ── Д3: целостность ключа дня ────────────────────────────────────────────────
+//
+// Контракт объявляет `(minute_ts, symbol)` тотальным порядком — на нём построен
+// keyset-курсор. Дубль эту тотальность отменяет, и последствие не «минута
+// приходит дважды», а хуже: курсор роняет вторую копию, если граница страницы
+// легла между копиями, и возвращает, если не легла. Один запрос отдавал разное
+// число строк при разном `limit`.
+//
+// Таблица ниже выписана РУКАМИ, как и preflight-таблица: взятая из реализации,
+// она краснела бы только вместе с ней.
+
+/** Ровно один статус и ровно один код. Не «какой-нибудь 4xx». */
+export const DAY_INTEGRITY_CONTRACT = { status: 409, code: 'DUPLICATE_ROW_KEY' } as const;
+
+/** Точный набор полей тела. Лишнее поле — тоже расхождение контракта. */
+export const DAY_INTEGRITY_KEYS = [
+  'code', 'date', 'error', 'generation', 'minuteTs', 'permanent', 'retryFromStart', 'symbol',
+] as const;
+
+/**
+ * Сверка контракта целостности для цели, у которой В ИЗВЕСТНОМ ДНЕ есть две
+ * строки с одним `(minute_ts, symbol)`.
+ *
+ * Вызывающий обязан САМ привести цель в это состояние и назвать адрес стыка —
+ * харнесс проверяет, что отказ наблюдаем, адресен и не зависит от `limit`.
+ *
+ * `cleanProbe` — диапазон, заведомо НЕ содержащий стыка. Без него нельзя
+ * отличить работающий инвариант от сервиса, отвечающего 409 на всё.
+ */
+export async function runDayIntegrityConformance(
+  t: HistoricalConformanceTarget,
+  seam: {
+    readonly symbol: string;
+    readonly date: string;
+    readonly minuteTs: number;
+    /** Окно, накрывающее стык. */
+    readonly fromMs: number;
+    readonly toMs: number;
+    /** Окно того же символа БЕЗ стыка; пропускается, если не задано. */
+    readonly cleanProbe?: { readonly fromMs: number; readonly toMs: number };
+  },
+): Promise<{ ok: true }> {
+  const q = (limit: number, from: number, to: number): string =>
+    `/historical/rows?symbols=${seam.symbol}&fromMs=${from}&toMs=${to}&limit=${limit}`;
+
+  // Позиция стыка внутри страницы неизвестна харнессу, поэтому берутся ЧЕТЫРЕ
+  // разных `limit`. Именно расхождение между ними и было дефектом: при одном
+  // значении копия терялась, при другом возвращалась.
+  const limits = [1, 2, 3, 1000];
+  const seen: string[] = [];
+  for (const lim of limits) {
+    const r = await getJson(t, q(lim, seam.fromMs, seam.toMs));
+    assert(
+      r.status === DAY_INTEGRITY_CONTRACT.status,
+      `day-integrity[limit=${lim}]: статус ${r.status}, ожидался ${DAY_INTEGRITY_CONTRACT.status}`,
+    );
+    assert(
+      r.body?.code === DAY_INTEGRITY_CONTRACT.code,
+      `day-integrity[limit=${lim}]: код ${JSON.stringify(r.body?.code)}`,
+    );
+    assert(
+      JSON.stringify(keysOf(r.body)) === JSON.stringify([...DAY_INTEGRITY_KEYS].sort()),
+      `day-integrity[limit=${lim}]: набор полей ${keysOf(r.body).join(',')}`,
+    );
+    // Постоянство объявлено в теле, а не выводится из кода: 409 под этим
+    // эндпоинтом несёт и второй факт (`generation changed`), который как раз
+    // разрешается повтором.
+    assert(r.body?.permanent === true, `day-integrity[limit=${lim}]: permanent !== true`);
+    assert(r.body?.retryFromStart === false, `day-integrity[limit=${lim}]: retryFromStart !== false`);
+    assert(
+      r.body?.date === seam.date && r.body?.symbol === seam.symbol && r.body?.minuteTs === seam.minuteTs,
+      `day-integrity[limit=${lim}]: адрес стыка ${r.body?.date}/${r.body?.symbol}/${r.body?.minuteTs}`,
+    );
+    seen.push(JSON.stringify(r.body));
+  }
+
+  // ЯДРО ПРОВЕРКИ. Разные `limit` обязаны дать один и тот же ответ — именно
+  // зависимость результата от размера страницы и была дефектом.
+  assert(
+    new Set(seen).size === 1,
+    `day-integrity: ответ зависит от limit (${new Set(seen).size} различных ответов на ${limits.length} запросов)`,
+  );
+
+  if (seam.cleanProbe) {
+    const clean = await getJson(t, q(50, seam.cleanProbe.fromMs, seam.cleanProbe.toMs));
+    assert(
+      clean.status === 200,
+      `day-integrity: чистое окно дало ${clean.status} — отказ обязан быть адресным, а не глобальным`,
+    );
+  }
+
+  return { ok: true };
+}
+
 export async function runHistoricalConformance(
   t: HistoricalConformanceTarget,
   opts: {
