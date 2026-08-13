@@ -183,11 +183,17 @@ export const DAY_INTEGRITY_KEYS = [
  * Сверка контракта целостности для цели, у которой В ИЗВЕСТНОМ ДНЕ есть две
  * строки с одним `(minute_ts, symbol)`.
  *
- * Вызывающий обязан САМ привести цель в это состояние и назвать адрес стыка —
- * харнесс проверяет, что отказ наблюдаем, адресен и не зависит от `limit`.
+ * ОБЛАСТЬ ОТКАЗА — ДЕНЬ, А НЕ ЗАПРОС. Первая редакция этого харнесса требовала
+ * обратного: она считала, что окно того же дня без стыка обязано отвечать 200.
+ * Требование было ошибочным и развело две честные реализации — платформа грузит
+ * закрытый день целиком и отказывала, мок фильтровал по окну и отвечал. Ни одна
+ * не была неправа: расходился контракт, а не код.
  *
- * `cleanProbe` — диапазон, заведомо НЕ содержащий стыка. Без него нельзя
- * отличить работающий инвариант от сервиса, отвечающего 409 на всё.
+ * Недостоверен ДЕНЬ. Знание об этом не должно зависеть от того, какое окно и
+ * какие символы спросили, иначе потребитель получает строки дня, о ложности
+ * соседних строк в котором уже известно, и не узнаёт об этом.
+ *
+ * Вызывающий обязан САМ привести цель в это состояние и назвать адрес стыка.
  */
 export async function runDayIntegrityConformance(
   t: HistoricalConformanceTarget,
@@ -198,57 +204,76 @@ export async function runDayIntegrityConformance(
     /** Окно, накрывающее стык. */
     readonly fromMs: number;
     readonly toMs: number;
-    /** Окно того же символа БЕЗ стыка; пропускается, если не задано. */
-    readonly cleanProbe?: { readonly fromMs: number; readonly toMs: number };
+    /** Окно ТОГО ЖЕ дня, НЕ содержащее стыка. Обязано отказывать так же. */
+    readonly sameDayCleanWindow?: { readonly fromMs: number; readonly toMs: number };
+    /** Символ того же дня БЕЗ собственного дубля. Обязан отказывать: недостоверен день. */
+    readonly otherSymbolSameDay?: string;
+    /** Окно ДРУГОГО, заведомо исправного дня. Обязано отвечать 200. */
+    readonly healthyOtherDay?: { readonly fromMs: number; readonly toMs: number };
   },
 ): Promise<{ ok: true }> {
-  const q = (limit: number, from: number, to: number): string =>
-    `/historical/rows?symbols=${seam.symbol}&fromMs=${from}&toMs=${to}&limit=${limit}`;
+  const q = (limit: number, from: number, to: number, symbol = seam.symbol): string =>
+    `/historical/rows?symbols=${symbol}&fromMs=${from}&toMs=${to}&limit=${limit}`;
 
-  // Позиция стыка внутри страницы неизвестна харнессу, поэтому берутся ЧЕТЫРЕ
-  // разных `limit`. Именно расхождение между ними и было дефектом: при одном
-  // значении копия терялась, при другом возвращалась.
-  const limits = [1, 2, 3, 1000];
-  const seen: string[] = [];
-  for (const lim of limits) {
-    const r = await getJson(t, q(lim, seam.fromMs, seam.toMs));
+  const expectRejection = async (label: string, path: string): Promise<string> => {
+    const r = await getJson(t, path);
     assert(
       r.status === DAY_INTEGRITY_CONTRACT.status,
-      `day-integrity[limit=${lim}]: статус ${r.status}, ожидался ${DAY_INTEGRITY_CONTRACT.status}`,
+      `day-integrity[${label}]: статус ${r.status}, ожидался ${DAY_INTEGRITY_CONTRACT.status}`,
     );
-    assert(
-      r.body?.code === DAY_INTEGRITY_CONTRACT.code,
-      `day-integrity[limit=${lim}]: код ${JSON.stringify(r.body?.code)}`,
-    );
+    assert(r.body?.code === DAY_INTEGRITY_CONTRACT.code, `day-integrity[${label}]: код ${JSON.stringify(r.body?.code)}`);
     assert(
       JSON.stringify(keysOf(r.body)) === JSON.stringify([...DAY_INTEGRITY_KEYS].sort()),
-      `day-integrity[limit=${lim}]: набор полей ${keysOf(r.body).join(',')}`,
+      `day-integrity[${label}]: набор полей ${keysOf(r.body).join(',')}`,
     );
-    // Постоянство объявлено в теле, а не выводится из кода: 409 под этим
-    // эндпоинтом несёт и второй факт (`generation changed`), который как раз
-    // разрешается повтором.
-    assert(r.body?.permanent === true, `day-integrity[limit=${lim}]: permanent !== true`);
-    assert(r.body?.retryFromStart === false, `day-integrity[limit=${lim}]: retryFromStart !== false`);
+    assert(r.body?.permanent === true, `day-integrity[${label}]: permanent !== true`);
+    assert(r.body?.retryFromStart === false, `day-integrity[${label}]: retryFromStart !== false`);
     assert(
       r.body?.date === seam.date && r.body?.symbol === seam.symbol && r.body?.minuteTs === seam.minuteTs,
-      `day-integrity[limit=${lim}]: адрес стыка ${r.body?.date}/${r.body?.symbol}/${r.body?.minuteTs}`,
+      `day-integrity[${label}]: адрес стыка ${r.body?.date}/${r.body?.symbol}/${r.body?.minuteTs}`,
     );
-    seen.push(JSON.stringify(r.body));
-  }
+    return JSON.stringify(r.body);
+  };
 
-  // ЯДРО ПРОВЕРКИ. Разные `limit` обязаны дать один и тот же ответ — именно
-  // зависимость результата от размера страницы и была дефектом.
+  // Позиция стыка внутри страницы харнессу неизвестна, поэтому берутся ЧЕТЫРЕ
+  // разных `limit`. Именно расхождение между ними и было дефектом.
+  const limits = [1, 2, 3, 1000];
+  const seen: string[] = [];
+  for (const lim of limits) seen.push(await expectRejection(`limit=${lim}`, q(lim, seam.fromMs, seam.toMs)));
+
+  // ЯДРО: разные `limit` дают один и тот же ответ.
   assert(
     new Set(seen).size === 1,
     `day-integrity: ответ зависит от limit (${new Set(seen).size} различных ответов на ${limits.length} запросов)`,
   );
 
-  if (seam.cleanProbe) {
-    const clean = await getJson(t, q(50, seam.cleanProbe.fromMs, seam.cleanProbe.toMs));
-    assert(
-      clean.status === 200,
-      `day-integrity: чистое окно дало ${clean.status} — отказ обязан быть адресным, а не глобальным`,
+  // Чистое окно ТОГО ЖЕ дня — тот же отказ и то же тело. Отдать его значило бы
+  // выдать строки дня, о недостоверности которого уже известно.
+  if (seam.sameDayCleanWindow) {
+    const body = await expectRejection(
+      'same-day clean window',
+      q(50, seam.sameDayCleanWindow.fromMs, seam.sameDayCleanWindow.toMs),
     );
+    assert(body === seen[0], 'day-integrity: чистое окно того же дня ответило ИНАЧЕ, чем окно со стыком');
+  }
+
+  // Соседний символ того же дня — тоже отказ: недостоверен день, а не символ.
+  if (seam.otherSymbolSameDay !== undefined) {
+    await expectRejection(
+      `other symbol ${seam.otherSymbolSameDay}`,
+      q(50, seam.fromMs, seam.toMs, seam.otherSymbolSameDay),
+    );
+  }
+
+  // А вот ДРУГОЙ день обязан отвечать. Без этого нельзя отличить работающий
+  // инвариант от сервиса, отказывающего на всё подряд.
+  if (seam.healthyOtherDay) {
+    const r = await getJson(t, q(50, seam.healthyOtherDay.fromMs, seam.healthyOtherDay.toMs));
+    assert(
+      r.status === 200,
+      `day-integrity: исправный ДРУГОЙ день дал ${r.status} — отказ обязан быть ограничен повреждённым днём`,
+    );
+    assert(Array.isArray(r.body?.items), 'day-integrity: исправный день не вернул items');
   }
 
   return { ok: true };
