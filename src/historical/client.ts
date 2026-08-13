@@ -24,6 +24,11 @@ import {
   type PreflightResult,
 } from './availability.js';
 import type { CanonicalRowV2 } from './canonical-row.js';
+import {
+  DAY_INTEGRITY_STATUS,
+  HistoricalDayIntegrityError,
+  classifyDayIntegrityResponse,
+} from './day-integrity.js';
 
 type FetchLike = typeof globalThis.fetch;
 
@@ -119,6 +124,17 @@ function retryAfterMs(res: Response): number | undefined {
   return undefined;
 }
 
+/**
+ * Ошибка HTTP-отказа. Сообщение сохраняет форму `<label>: HTTP <status>` во ВСЕХ
+ * случаях, включая распознанный отказ целостности: классификаторы, разбирающие
+ * текст, продолжают работать, а типы приезжают дополнительно, а не вместо.
+ */
+function httpFailure(label: string, status: number, errorBody: unknown): Error {
+  const message = `${label}: HTTP ${status}`;
+  const violation = classifyDayIntegrityResponse(status, errorBody);
+  return violation === null ? new Error(message) : new HistoricalDayIntegrityError(message, violation);
+}
+
 function backoffMs(attempt: number, r: Resilience): number {
   const exp = Math.min(r.retryMaxMs, r.retryBaseMs * 2 ** (attempt - 1));
   return Math.max(1, Math.floor(Math.random() * exp)); // full jitter
@@ -157,12 +173,28 @@ async function resilientJson<T>(
       ctrl.abort();
     }, budget);
 
-    let outcome: { ok: true; body: T | undefined } | { ok: false; status: number; retryAfter?: number };
+    let outcome:
+      | { ok: true; body: T | undefined }
+      | { ok: false; status: number; errorBody?: unknown; retryAfter?: number };
     try {
       const res = await r.fetchImpl(url, { signal: ctrl.signal });
       // The body read stays INSIDE the timer window: a stalled body aborts on the same signal.
       if (res.ok) outcome = { ok: true, body: readBody ? ((await res.json()) as T) : undefined };
-      else outcome = { ok: false, status: res.status, retryAfter: res.status === 429 ? retryAfterMs(res) : undefined };
+      else {
+        // Тело ошибки читается ТОЛЬКО для 409 — единственного статуса, под которым
+        // у этого эндпоинта живут разные факты, требующие разных действий. Для
+        // остальных статусов поведение прежнее: лишнее чтение стоило бы времени в
+        // окне таймаута и ничего не давало бы. Непарсящееся тело — не ошибка
+        // здесь: ниже такой ответ просто не классифицируется и остаётся `HTTP 409`.
+        const errorBody =
+          res.status === DAY_INTEGRITY_STATUS ? await res.json().catch(() => undefined) : undefined;
+        outcome = {
+          ok: false,
+          status: res.status,
+          errorBody,
+          retryAfter: res.status === 429 ? retryAfterMs(res) : undefined,
+        };
+      }
     } catch (err) {
       clearTimeout(timer);
       lastErr = timedOut
@@ -180,7 +212,7 @@ async function resilientJson<T>(
 
     const status = outcome.status;
     const transient = status === 408 || status === 429 || (status >= 500 && status <= 599);
-    if (!transient || attempt === r.maxAttempts) throw new Error(`${label}: HTTP ${status}`);
+    if (!transient || attempt === r.maxAttempts) throw httpFailure(label, status, outcome.errorBody);
     lastErr = new Error(`${label}: HTTP ${status}`);
     await sleepBounded(outcome.retryAfter ?? backoffMs(attempt, r), deadlineAt, r);
   }

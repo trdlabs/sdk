@@ -46,7 +46,7 @@ export type {
 
 /** Version of this SDK package. Kept in lockstep with package.json "version"
  *  by the version-consistency release guard (test/version-consistency.test.ts). */
-export const SDK_VERSION = '0.16.0';
+export const SDK_VERSION = '0.17.0';
 
 /**
  * Machine-checkable declaration of capabilities the SDK deliberately does NOT have.
