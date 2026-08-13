@@ -86,7 +86,7 @@ const ACTOR_MARKET_DATA: readonly MarketDataRequirement[] = [
 // явно (см. doc `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, event-driven.ts).
 const ACTOR: ModuleManifest = {
   ...BASE,
-  contractVersion: '017.4',
+  contractVersion: '017.5',
   lifecycle: 'event_driven',
   hooks: ['init', 'onEvent', 'dispose'],
   marketData: ACTOR_MARKET_DATA,
@@ -104,9 +104,9 @@ test('манифест без lifecycle остаётся валидным и п�
 });
 
 test('манифесты прежних версий контракта остаются поддержанными', () => {
-  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4']);
-  assert.equal(CONTRACT_VERSION, '017.4');
-  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4']) {
+  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5']);
+  assert.equal(CONTRACT_VERSION, '017.5');
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4', '017.5']) {
     assert.equal(check({ ...BASE, contractVersion }).status, 'accepted', contractVersion);
   }
 });
@@ -117,9 +117,15 @@ test('манифесты прежних версий контракта оста
 // исходный E1-surface, больше его не покрывает (тот surface переписан целиком, см. doc
 // EVENT_DRIVEN_MIN_CONTRACT_VERSION). Явный `lifecycle: 'single_position'` сюда НЕ входит — он
 // живёт под отдельным, более низким порогом (см. следующий тест, I-1).
-test('surface event_driven (lifecycle: event_driven/onEvent/marketData/warmup) требует >=017.4; 017.1-017.3 отвергают его', () => {
-  assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, '017.4');
-  for (const contractVersion of ['017.1', '017.2', '017.3'] as const) {
+//
+// 083 S3 (ADR-0012/0013): порог подвинулся ещё раз, с 017.4 на 017.5, и по той же причине — surface
+// снова переписан: дескриптор источника стал замкнутым union'ом с хостовым вариантом, а
+// `OpenOrderView` сменил состав полей (`qty` → `filledQtyUsd` плюс необязательные оценка и факт).
+// Поэтому 017.4 теперь в списке ОТВЕРГАЮЩИХ: версия, описывающая форму, которой в пакете больше
+// нет, не вправе её заявлять.
+test('surface event_driven (lifecycle: event_driven/onEvent/marketData/warmup) требует >=017.5; 017.1-017.4 отвергают его', () => {
+  assert.equal(EVENT_DRIVEN_MIN_CONTRACT_VERSION, '017.5');
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4'] as const) {
     for (const [label, manifest] of [
       ['lifecycle: event_driven', { ...ACTOR, contractVersion }],
       ['хук onEvent', { ...ACTOR, lifecycle: undefined, contractVersion }],
@@ -155,12 +161,12 @@ test('lifecycle: single_position требует лишь >=017.3 (поле, не
   assert.equal(accepted.status, 'accepted', JSON.stringify(accepted.issues));
 });
 
-test('под 017.4 тот же surface принимается', () => {
-  assert.equal(check({ ...ACTOR, contractVersion: '017.4' }).status, 'accepted');
+test('под 017.5 тот же surface принимается', () => {
+  assert.equal(check({ ...ACTOR, contractVersion: '017.5' }).status, 'accepted');
 });
 
 test('манифест БЕЗ нового surface версией не ограждается', () => {
-  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4']) {
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4', '017.5']) {
     assert.equal(check({ ...BASE, contractVersion }).status, 'accepted', contractVersion);
   }
 });
@@ -205,16 +211,16 @@ test('event_driven с хуками фазовой модели отклоняе�
 });
 
 test('single_position с onEvent отклоняется', () => {
-  // hooks содержит 'onEvent' — уже surface, версия ≥017.4 нужна, чтобы изолировать код именно
+  // hooks содержит 'onEvent' — уже surface, версия ≥017.5 нужна, чтобы изолировать код именно
   // lifecycle_form_invalid (а не смешать его с unsupported_contract_version).
-  const codes = codesOf({ ...BASE, contractVersion: '017.4', hooks: ['onBarClose', 'onEvent'] });
+  const codes = codesOf({ ...BASE, contractVersion: '017.5', hooks: ['onBarClose', 'onEvent'] });
   assert.deepEqual(codes, ['lifecycle_form_invalid']);
 });
 
 test('overlay не может объявить форму актора', () => {
   const overlay: ModuleManifest = {
     ...BASE,
-    contractVersion: '017.4',
+    contractVersion: '017.5',
     kind: 'overlay',
     lifecycle: 'event_driven',
     hooks: ['apply'],
@@ -499,7 +505,8 @@ test('I-7: OpenOrderView — market/limit/stop_market дискриминиров
     type: 'market',
     status: 'accepted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     createdTs: timestampUs(1_700_000_000_000_000),
   };
@@ -509,7 +516,8 @@ test('I-7: OpenOrderView — market/limit/stop_market дискриминиров
     type: 'limit',
     status: 'submitted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     price: 55_000,
     createdTs: timestampUs(1_700_000_000_000_000),
@@ -518,8 +526,13 @@ test('I-7: OpenOrderView — market/limit/stop_market дискриминиров
   assert.equal(views[0]?.type, 'market');
   assert.equal(views[1]?.type, 'limit');
 
-  // Остаток заявки вычислим: qty и filledQty — ОДНА единица (базовая валюта), не qtyUsd (C-3).
-  assert.equal(market.qty - market.filledQty, 0.002);
+  // Остаток заявки вычислим — и считается он в ЕДИНИЦЕ ЗАЯВКИ (ADR-0013, `017.5`). Прежде здесь
+  // стояло `qty − filledQty` в базовой валюте; base-величина оказалась невыразимой у хоста без цены
+  // пересчёта и подставлялась нулём, из-за чего остаток читался как «исполнена целиком».
+  assert.equal(market.qtyUsd - market.filledQtyUsd, 100);
+  // Базовые величины при этом остаются доступными — но как оценка и факт, а не как основа остатка.
+  assert.equal(market.estimatedQty, 0.002);
+  assert.equal(market.filledQty, 0);
 
   // @ts-expect-error — лимитная заявка без price неоднозначна, симметрично ActorPlaceLimitCommand.
   const missingPrice: OpenLimitOrderView = {
@@ -528,7 +541,8 @@ test('I-7: OpenOrderView — market/limit/stop_market дискриминиров
     type: 'limit',
     status: 'accepted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     createdTs: timestampUs(1),
   };
@@ -540,7 +554,8 @@ test('I-7: OpenOrderView — market/limit/stop_market дискриминиров
     type: 'market',
     status: 'accepted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     // @ts-expect-error — рыночная заявка с ценой неоднозначна, симметрично ActorPlaceMarketCommand.
     price: 50_000,
@@ -556,7 +571,8 @@ test('I-2: status различает submitted/accepted — ортогональ
     type: 'market',
     status: 'submitted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     createdTs: timestampUs(1),
   };
@@ -577,7 +593,8 @@ test('Minor: OpenOrderView несёт опциональный tif — та же
     type: 'limit',
     status: 'accepted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     price: 50_000,
     tif: 'ioc',
@@ -592,7 +609,8 @@ test('Minor: OpenOrderView несёт опциональный tif — та же
     type: 'limit',
     status: 'accepted',
     qtyUsd: 100,
-    qty: 0.002,
+    filledQtyUsd: 0,
+    estimatedQty: 0.002,
     filledQty: 0,
     price: 50_000,
     createdTs: timestampUs(1),

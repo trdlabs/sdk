@@ -7,7 +7,7 @@
     "summary": "Сетка лимиток вокруг цены с переставлением по таймеру",
     "rationale": "Order-flow-логика невыразима в позиционных решениях: нужны place/cancel и таймеры.",
     "author": "agent",
-    "contractVersion": "017.4",
+    "contractVersion": "017.5",
     "status": "research_only",
     "lifecycle": "event_driven",
     "paramsSchema": {
