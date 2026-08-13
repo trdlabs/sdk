@@ -99,7 +99,7 @@ const SINGLE_POSITION_BASE: ModuleManifest = {
 
 const ACTOR_BASE: ModuleManifest = {
   ...SINGLE_POSITION_BASE,
-  contractVersion: '017.4',
+  contractVersion: '017.5',
   lifecycle: 'event_driven',
   hooks: ['onEvent'],
   marketData: [CANDLES_REQ],
@@ -109,7 +109,7 @@ const ACTOR_BASE: ModuleManifest = {
 // 1) 017.4 валидирует новый surface; 017.1–017.3 продолжают валидироваться (single_position).
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('017.4 валидирует новый surface актора', () => {
+test('017.5 валидирует новый surface актора', () => {
   const res = check(ACTOR_BASE);
   assert.equal(res.status, 'accepted', JSON.stringify(res.issues));
 });
@@ -134,7 +134,7 @@ test('манифест с surface актора под 017.1/017.2/017.3 отве
     assert.ok(issue, `${contractVersion}: код должен быть unsupported_contract_version, получено ${JSON.stringify(res.issues)}`);
     assert.equal(issue?.path, '/contractVersion');
     // «внятный код» — сообщение обязано называть требуемый порог, а не просто «версия не та».
-    assert.match(issue?.message ?? '', /017\.4/);
+    assert.match(issue?.message ?? '', /017\.5/);
   }
 });
 
@@ -149,10 +149,10 @@ test('warmup — тоже часть surface (долг задачи 3, закр�
   assert.ok(res.issues.some((i) => i.code === 'unsupported_contract_version' && i.path === '/contractVersion'));
 });
 
-test('warmup под 017.4 принимается', () => {
+test('warmup под 017.5 принимается', () => {
   const withWarmup: ModuleManifest = {
     ...SINGLE_POSITION_BASE,
-    contractVersion: '017.4',
+    contractVersion: '017.5',
     warmup: { kind: 'tape_replay' },
   };
   assert.equal(check(withWarmup).status, 'accepted');
@@ -327,12 +327,12 @@ test('дом RNG: замыкание-генератор, спрятанное в
 
 test('CONTRACT_VERSION синхронна между contract/constants.ts и research-contract barrel', () => {
   assert.equal(CONTRACT_VERSION_ROOT, CONTRACT_VERSION);
-  assert.equal(CONTRACT_VERSION, '017.4');
+  assert.equal(CONTRACT_VERSION, '017.5');
 });
 
 test('SUPPORTED_CONTRACT_VERSIONS синхронен между contract/constants.ts и research-contract barrel', () => {
   assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS_ROOT], [...SUPPORTED_CONTRACT_VERSIONS]);
-  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4']);
+  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5']);
 });
 
 test('MARKET_DATA_KINDS достижим и идентичен из обеих копий', () => {
@@ -343,7 +343,7 @@ test('MARKET_DATA_KINDS достижим и идентичен из обеих �
 // CONTRACT_VERSION)` — кодировало «surface актора ВСЕГДА вводится ТЕКУЩЕЙ версией», случайный
 // инвариант этой задачи, а не требование контракта. Следующий несвязанный бамп CONTRACT_VERSION
 // (не трогающий surface event_driven) сделал бы этот тест красным на ровном месте. Опечатку в
-// самом пороге (например, `'017.5'` вместо `'017.4'`) ловит членство в SUPPORTED_CONTRACT_VERSIONS
+// самом пороге (например, `'017.6'` вместо `'017.5'`) ловит членство в SUPPORTED_CONTRACT_VERSIONS
 // — та же гарантия, но без ложной связи с CONTRACT_VERSION.
 test('EVENT_DRIVEN_MIN_CONTRACT_VERSION — валидный член SUPPORTED_CONTRACT_VERSIONS (не опечатка в пороге)', () => {
   assert.ok(

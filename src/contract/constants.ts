@@ -17,10 +17,10 @@
  * описывает форму E1, уже не существующую в этом пакете. См. `EVENT_DRIVEN_MIN_CONTRACT_VERSION`
  * (`research-contract/event-driven.ts`) — фактический гейт, эта константа лишь мирроит его отсюда.
  */
-export const CONTRACT_VERSION = '017.4' as const;
+export const CONTRACT_VERSION = '017.5' as const;
 
 /** Supported research contract versions (back-compat: `017.1`–`017.3` manifests remain valid). */
-export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3', '017.4'] as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3', '017.4', '017.5'] as const;
 
 /**
  * @deprecated Для нового авторства не использовать — см. `MARKET_DATA_KINDS` ниже
