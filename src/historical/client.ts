@@ -65,6 +65,16 @@ export interface HistoricalCoverageEntry {
   readonly toMs: number;
   readonly barCount: number;
   readonly availability: string;
+  /**
+   * cc#365 — происхождение свечей, как его сообщил сервер. Тип `unknown` НАМЕРЕННО: клиент
+   * отдаёт тело ответа как есть и ничего здесь не проверяет, а типизированное поле было бы
+   * утверждением, которого никто не проверял. Разбор — `coverageEntryCandleOrigin`, он
+   * fail-closed и различает «сервер промолчал» и «сервер сказал: файлы молчат».
+   *
+   * Поле необязательно: платформа старше cc#365 его не эмитит, и это законное состояние,
+   * дающее `unknown:not_reported`.
+   */
+  readonly candleOrigin?: unknown;
 }
 
 export interface HistoricalCoverageSnapshot {
