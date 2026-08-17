@@ -51,3 +51,24 @@ export {
 } from './day-integrity.js';
 
 export type { DayIntegrityViolation } from './day-integrity.js';
+
+// Д5 — общий оракул паритета транспортов. Живёт здесь, а не в platform, потому что стороны
+// замера лежат в разных репозиториях: platform отдаёт данные, бэктестер при форме
+// «файлы + Range» декодирует parquet сам. Оракул, оставленный в непубликуемом пакете,
+// породил бы вторую копию, а две копии канонизатора расходятся на первом краевом случае —
+// и расхождение выглядело бы как дефект транспорта, то есть как то, что замер ищет.
+export {
+  ResultDigestError,
+  computeResultDigest,
+  canonicalRowLine,
+  digestsAgree,
+  checkAgainstExpectation,
+  checkParity,
+} from './result-digest.js';
+
+export type {
+  DigestRow,
+  ResultDigest,
+  ResultDigestFailure,
+  ResultExpectation,
+} from './result-digest.js';
