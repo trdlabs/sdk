@@ -145,12 +145,17 @@ test('ПОТЕРЯ symbolFrom не проходит молча — она пер
   assert.match(messagesOf([lostDiscriminator]).join('\n'), /symbolFrom.*'actor'.*явно|объявите symbolFrom/);
 });
 
-test('symbolFrom с чужим значением отвергается — белый список, а не «что-то похожее»', () => {
+test('symbolFrom с чужим значением отвергается СХЕМОЙ — и проба пиннит именно её', () => {
+  // Код назван точно, а не «любой из двух». Первая редакция принимала
+  // `invalid_market_data_requirement` ИЛИ `schema_invalid` — и потому не различала, чей гейт
+  // сработал: мутационный контроль снял дублирующую рантайм-проверку, а проба осталась зелёной.
+  // Замкнутый каталог живёт в схеме (`additionalProperties: false` в обеих ветвях `anyOf`), и
+  // пиннить надо её.
   const codes = codesOf([{ ...BOUND, symbolFrom: 'run' }]);
-  assert.ok(
-    codes.includes('invalid_market_data_requirement') || codes.includes('schema_invalid'),
-    `получено: ${codes.join(', ')}`,
-  );
+  assert.ok(codes.length > 0, 'требование с чужим symbolFrom обязано быть отвергнуто');
+  // Число ошибок не пиннится намеренно — их столько, сколько ветвей `anyOf` не подошло, и это
+  // деталь генерации схемы. Пиннится утверждение: отвергнуто, и отвергнуто ТОЛЬКО схемой.
+  assert.deepEqual([...new Set(codes)], ['schema_invalid']);
 });
 
 test('фиксированная ветвь с ПУСТЫМ символом по-прежнему отвергается', () => {
