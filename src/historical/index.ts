@@ -72,3 +72,21 @@ export type {
   ResultDigestFailure,
   ResultExpectation,
 } from './result-digest.js';
+
+// cc#365 — происхождение свечей покрытия. Сумма-тип, а не пара полей: имя венью выразимо только
+// внутри однородного случая, поэтому «имя есть, про однородность неизвестно» непредставимо, а не
+// запрещено проверкой. `mixed` не сворачивается в `unknown` — перечень венью это знание.
+export {
+  PRICE_SOURCE_VENUES,
+  CANDLE_ORIGIN_ARCHIVE_REASONS,
+  CANDLE_ORIGIN_CHANNEL_REASONS,
+  isPriceSourceVenue,
+  parseCandleOrigin,
+  coverageEntryCandleOrigin,
+} from './candle-origin.js';
+
+export type {
+  PriceSourceVenue,
+  CandleOrigin,
+  CandleOriginUnknownReason,
+} from './candle-origin.js';
