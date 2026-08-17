@@ -104,9 +104,9 @@ test('манифест без lifecycle остаётся валидным и п�
 });
 
 test('манифесты прежних версий контракта остаются поддержанными', () => {
-  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5']);
-  assert.equal(CONTRACT_VERSION, '017.5');
-  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4', '017.5']) {
+  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5', '017.6']);
+  assert.equal(CONTRACT_VERSION, '017.6');
+  for (const contractVersion of ['017.1', '017.2', '017.3', '017.4', '017.5', '017.6']) {
     assert.equal(check({ ...BASE, contractVersion }).status, 'accepted', contractVersion);
   }
 });

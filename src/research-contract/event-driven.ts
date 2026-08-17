@@ -117,6 +117,20 @@ export const EVENT_DRIVEN_MIN_CONTRACT_VERSION = '017.5' as const;
  */
 export const LIFECYCLE_FIELD_MIN_CONTRACT_VERSION = '017.3' as const;
 
+/**
+ * Порог СВЯЗАННОЙ ветви привязки (`symbolFrom: 'actor'`) — ТРЕТИЙ порог, а не переиспользованный.
+ *
+ * Принадлежность версии набору поддерживаемых её НЕ заменяет: `SUPPORTED_CONTRACT_VERSIONS` хранит
+ * версии, но порог у каждой ФОРМЫ свой. Манифест, объявивший `017.5`, обязан быть отвергнут при
+ * попытке воспользоваться формой, которой в `017.5` не существовало, — иначе бамп версии
+ * декларативен, а гейт обещает совместимость, проверяя список.
+ *
+ * Выше `EVENT_DRIVEN_MIN_CONTRACT_VERSION` намеренно: связанная ветвь — переписанная поверхность
+ * ТРЕБОВАНИЯ, а не новая форма манифеста, и старая event-driven стратегия под `017.5` остаётся
+ * валидной ровно как была.
+ */
+export const SYMBOL_FROM_MIN_CONTRACT_VERSION = '017.6' as const;
+
 /** Хуки, допустимые для `event_driven` (единая точка входа + опциональный жизненный цикл). */
 export const EVENT_DRIVEN_HOOKS = ['init', 'onEvent', 'dispose'] as const;
 
@@ -944,14 +958,14 @@ export type RevisionPolicy =
  * --emitDeclarationOnly` с флагами `tsconfig.json`, exit 0; TS4020 относится к именам,
  * НЕНАЗЫВАЕМЫМ в `.d.ts`, module-scope интерфейс называем всегда).
  */
-interface RequirementBase {
+/** Поля требования, НЕ зависящие от способа привязки к инструменту. */
+interface RequirementFields {
   /** Идентификатор требования ВНУТРИ манифеста (НЕ `SubscriptionId`: тот назначает биндинг при
    *  резолве, задача 8, а не автор манифеста). Валидатор в v1 отвергает пустую строку и дубли
    *  среди требований одного манифеста (`invalid_market_data_requirement` /
    *  `duplicate_market_data_requirement_id`) — `id` единственная ручка связи требования с
    *  binding'ом ниже по цепочке, неоднозначность здесь распространяется дальше. */
   readonly id: string;
-  readonly instrument: InstrumentRef;
   /** Гранулярность/период, `DurationUs` (S1 §3.2 — микросекунды, единственная внутренняя единица;
    *  НЕ `number`, чтобы забытый `* 1000` не был исполняемым кодом). Валидатор в v1 отвергает
    *  `interval <= 0` (`invalid_market_data_requirement`) — нулевой или отрицательный период не
@@ -974,31 +988,85 @@ interface RequirementBase {
   readonly revisionPolicy?: RevisionPolicy;
 }
 
-/** Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`. */
-export interface CandlesMarketDataRequirement extends RequirementBase {
-  readonly kind: 'candles';
-  readonly priceType: 'trade';
+/**
+ * Идентичность рынка БЕЗ символа — то, что называет СВЯЗАННАЯ ветвь привязки.
+ *
+ * `symbol?: never` — не украшение и не заглушка. Без него `{ venue, symbol }` структурно
+ * присваивалось бы этому типу, и связанная ветвь молча принимала бы объявленный символ, которого
+ * не собирается соблюдать. Это ровно тот класс, что уже дважды стоил крови в этом эпике:
+ * объявлено — не исполняется, и заметить нечем. Здесь его ловит КОМПИЛЯТОР.
+ */
+export interface VenueRef {
+  readonly venue: string;
+  readonly symbol?: never;
 }
 
+/**
+ * ФИКСИРОВАННАЯ привязка — «этот и только этот инструмент». Сегодняшняя форма, не изменившаяся ни
+ * на бит: символ назван и соблюдается.
+ *
+ * `symbolFrom?: never` закрывает бессмысленную комбинацию «символ назван И приносится актором» на
+ * уровне типа, а не соглашения.
+ */
+interface FixedInstrumentBinding {
+  readonly instrument: InstrumentRef;
+  readonly symbolFrom?: never;
+}
+
+/**
+ * СВЯЗАННАЯ привязка — «венью названо, символ приносит прогон».
+ *
+ * ПОЧЕМУ РАЗЛИЧИТЕЛЬ — ОТДЕЛЬНОЕ ПОЛЕ, А НЕ ОТСУТСТВИЕ СИМВОЛА. Форма «symbol необязателен,
+ * отсутствие означает символ актора» отвергнута осознанно: отсутствие ключа как разрешающее
+ * значение неотличимо от ПОТЕРИ поля — при сериализации, при частичном копировании, при правке
+ * руками. Явный `symbolFrom` не может потеряться незаметно: его пропажа переводит требование в
+ * фиксированную ветвь, где символ обязателен, и валидатор отвергает такое требование.
+ *
+ * Венью остаётся и здесь: это идентичность РЫНКА, и она нужна для сверки с доказанным
+ * происхождением свечей независимо от того, кто приносит символ.
+ */
+interface ActorInstrumentBinding {
+  readonly instrument: VenueRef;
+  readonly symbolFrom: 'actor';
+}
+
+/**
+ * Требование как РАЗМЕЧЕННОЕ ОБЪЕДИНЕНИЕ по способу привязки.
+ *
+ * Ключевое свойство: ни одно поле не игнорируется и ни одно не подразумевается. У связанной ветви
+ * символа нет ВОВСЕ — значит нечего не соблюсти; у фиксированной он есть и соблюдается как сегодня.
+ *
+ * До этой формы `instrument` нёс два смысла сразу — идентичность рынка и привязку требования к
+ * прогону. При одном акторе они совпадают и потому неразличимы; при N расходятся, и любое одно
+ * чтение меняет смысл публичного поля.
+ */
+type RequirementBase = RequirementFields & (FixedInstrumentBinding | ActorInstrumentBinding);
+
+/** Закрытые (исторические) свечи. Единственный ценовой ряд — `priceType` замкнут на `'trade'`. */
+export type CandlesMarketDataRequirement = RequirementBase & {
+  readonly kind: 'candles';
+  readonly priceType: 'trade';
+};
+
 /** Open interest — point observation (см. `MarketOpenInterestObservedEvent`, задача 2). */
-export interface OpenInterestMarketDataRequirement extends RequirementBase {
+export type OpenInterestMarketDataRequirement = RequirementBase & {
   readonly kind: 'open_interest';
   readonly scope: MarketDataScope;
   readonly unit: MarketDataUnit;
-}
+};
 
 /** Ликвидации — interval aggregate за закрытый бакет (см. `MarketLiquidationsBucketClosedEvent`). */
-export interface LiquidationsMarketDataRequirement extends RequirementBase {
+export type LiquidationsMarketDataRequirement = RequirementBase & {
   readonly kind: 'liquidations';
   readonly scope: MarketDataScope;
-}
+};
 
 /** Taker-объём — interval aggregate (см. `MarketTakerVolumeBucketClosedEvent`). */
-export interface TakerVolumeMarketDataRequirement extends RequirementBase {
+export type TakerVolumeMarketDataRequirement = RequirementBase & {
   readonly kind: 'taker_volume';
   readonly scope: MarketDataScope;
   readonly unit: MarketDataUnit;
-}
+};
 
 /**
  * Funding: `form` различает periodic rate-тик от settlement-выплаты (см. doc `MarketFundingObservedEvent`
@@ -1008,11 +1076,11 @@ export interface TakerVolumeMarketDataRequirement extends RequirementBase {
  * settlement в архиве физически нет. Как только появится колонка, `form: 'settlement'`
  * резолвится без изменения формы этого типа.
  */
-export interface FundingMarketDataRequirement extends RequirementBase {
+export type FundingMarketDataRequirement = RequirementBase & {
   readonly kind: 'funding';
   readonly scope: MarketDataScope;
   readonly form: 'rate' | 'settlement';
-}
+};
 
 /** Замкнутый union требований к рыночным данным формы `event_driven` (закрытый каталог, требование 1). */
 export type MarketDataRequirement =

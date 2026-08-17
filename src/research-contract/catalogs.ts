@@ -12,7 +12,7 @@
  *  `017.3` обещал СТАРУЮ форму E1 (мс-таймстемпы, `ActorBarEvent`, released `PositionView` без
  *  `openedAt`), которой в этом пакете больше нет. Манифесты `017.1`–`017.3` остаются валидны (их
  *  форма — дефолтный `single_position`, не знающий ни старого, ни нового surface актора). */
-export const CONTRACT_VERSION = '017.5';
+export const CONTRACT_VERSION = '017.6';
 
 /** Замкнутый каталог метрик (data-model §15). Неизвестное имя в запросе → `unknown_metric`. */
 export const METRIC_CATALOG = ['pnl', 'sharpe', 'max_drawdown', 'win_rate', 'total_trades', 'profit_factor', 'top_trade_contribution_pct'] as const;
@@ -37,7 +37,7 @@ export const FORBIDDEN_CAPABILITIES = [
  *  (append-в-конце) — `017.1`–`017.3` продолжают валидироваться (single_position-манифесты не
  *  затронуты ни разу за весь S1), просто больше НЕ покрывают surface актора (см. `CONTRACT_VERSION`
  *  выше и `EVENT_DRIVEN_MIN_CONTRACT_VERSION`, `event-driven.ts`). */
-export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3', '017.4', '017.5'] as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['017.1', '017.2', '017.3', '017.4', '017.5', '017.6'] as const;
 
 /**
  * @deprecated ДЛЯ НОВОГО АВТОРСТВА: не использовать. Новый код, объявляющий рыночные данные формы

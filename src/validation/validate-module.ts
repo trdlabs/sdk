@@ -10,6 +10,7 @@ import {
   DEFAULT_STRATEGY_LIFECYCLE,
   EVENT_DRIVEN_HOOKS,
   EVENT_DRIVEN_MIN_CONTRACT_VERSION,
+  SYMBOL_FROM_MIN_CONTRACT_VERSION,
   LIFECYCLE_FIELD_MIN_CONTRACT_VERSION,
   STRATEGY_LIFECYCLES,
   type StrategyLifecycle,
@@ -216,6 +217,51 @@ function validateMarketDataRequirements(marketData: unknown, issues: ValidationI
         );
       }
     }
+
+    // ── ПРИВЯЗКА ТРЕБОВАНИЯ К ИНСТРУМЕНТУ: две ветви, и обе проверяются ЗДЕСЬ ──────────────
+    //
+    // Схема закрывает форму (`additionalProperties: false`, перечень `required`), но не может
+    // выразить «ровно одна из двух ветвей»: у связанной ветви `instrument.symbol` обязан
+    // ОТСУТСТВОВАТЬ, у фиксированной — присутствовать. Манифест приходит из JSON, где типов нет.
+    //
+    // Различитель — `symbolFrom`, а не отсутствие символа. Отсутствие ключа как разрешающее
+    // значение неотличимо от потери поля; потеря же `symbolFrom` переводит требование в
+    // фиксированную ветвь, где символ обязателен, и отказ наступает сразу.
+    if (req.symbolFrom !== undefined) {
+      if (req.symbolFrom !== 'actor') {
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            `symbolFrom допускает единственное значение 'actor', получено: ${JSON.stringify(req.symbolFrom)}`,
+            `${base}/symbolFrom`,
+          ),
+        );
+      } else if (instrument !== null && instrument.symbol !== undefined) {
+        // САМОЕ ВАЖНОЕ МЕСТО ЭТОЙ ВЕТВИ. Символ, названный рядом с `symbolFrom: 'actor'`, не
+        // будет соблюдён — прогон подставит свой. Принять такое требование значило бы вернуть
+        // ровно тот дефект, ради устранения которого ветвь и заведена: объявлено, не исполняется,
+        // заметить нечем. Поэтому отказ, а не игнорирование.
+        issues.push(
+          makeIssue(
+            'invalid_market_data_requirement',
+            'при symbolFrom: \'actor\' символ приносит прогон, поэтому instrument.symbol обязан ' +
+              'ОТСУТСТВОВАТЬ: названный здесь символ не был бы соблюдён, и заметить это было бы нечем',
+            `${base}/instrument/symbol`,
+          ),
+        );
+      }
+    } else if (instrument !== null && instrument.symbol === undefined) {
+      // Фиксированная ветвь без символа — не «связанная по умолчанию». Умолчания здесь нет
+      // намеренно: оно сделало бы потерю поля неотличимой от осознанного выбора.
+      issues.push(
+        makeIssue(
+          'invalid_market_data_requirement',
+          'instrument.symbol обязателен: требование без symbolFrom называет КОНКРЕТНЫЙ инструмент. ' +
+            'Если символ должен приносить прогон — объявите symbolFrom: \'actor\' явно',
+          `${base}/instrument/symbol`,
+        ),
+      );
+    }
   });
 }
 
@@ -342,15 +388,30 @@ function validateSurfaceContractVersion(
   const declaredIdx = supported.indexOf(declared);
   if (declaredIdx < 0) return; // версия вне набора — причина уже выставлена
 
-  const requiredVersion = usesRewrittenActorSurface
-    ? EVENT_DRIVEN_MIN_CONTRACT_VERSION
-    : LIFECYCLE_FIELD_MIN_CONTRACT_VERSION;
+  // ТРЕТИЙ порог, а не переиспользованный второй. Связанная ветвь привязки (`symbolFrom: 'actor'`)
+  // появилась в `017.6`; манифест, объявивший `017.5`, обязан быть отвергнут при попытке ею
+  // воспользоваться — иначе бамп версии декларативен. Проверяется ПРИСУТСТВИЕ поля, а не его
+  // значение: мусорное значение ловится отдельно (`invalid_market_data_requirement`), и молчать о
+  // версии на нём значило бы выдать один отказ вместо двух настоящих.
+  const usesBoundSymbolBranch =
+    Array.isArray(manifest.marketData) &&
+    manifest.marketData.some(
+      (req) => (req as { readonly symbolFrom?: unknown }).symbolFrom !== undefined,
+    );
+
+  const requiredVersion = usesBoundSymbolBranch
+    ? SYMBOL_FROM_MIN_CONTRACT_VERSION
+    : usesRewrittenActorSurface
+      ? EVENT_DRIVEN_MIN_CONTRACT_VERSION
+      : LIFECYCLE_FIELD_MIN_CONTRACT_VERSION;
   const introducedIdx = supported.indexOf(requiredVersion);
   if (introducedIdx >= 0 && declaredIdx >= introducedIdx) return;
 
-  const surfaceLabel = usesRewrittenActorSurface
-    ? 'event_driven (lifecycle: event_driven/onEvent/marketData/warmup)'
-    : 'lifecycle (конверт манифеста 083 E1)';
+  const surfaceLabel = usesBoundSymbolBranch
+    ? "связанная привязка требования (symbolFrom: 'actor')"
+    : usesRewrittenActorSurface
+      ? 'event_driven (lifecycle: event_driven/onEvent/marketData/warmup)'
+      : 'lifecycle (конверт манифеста 083 E1)';
   issues.push(
     makeIssue(
       'unsupported_contract_version',

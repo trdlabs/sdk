@@ -327,12 +327,12 @@ test('дом RNG: замыкание-генератор, спрятанное в
 
 test('CONTRACT_VERSION синхронна между contract/constants.ts и research-contract barrel', () => {
   assert.equal(CONTRACT_VERSION_ROOT, CONTRACT_VERSION);
-  assert.equal(CONTRACT_VERSION, '017.5');
+  assert.equal(CONTRACT_VERSION, '017.6');
 });
 
 test('SUPPORTED_CONTRACT_VERSIONS синхронен между contract/constants.ts и research-contract barrel', () => {
   assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS_ROOT], [...SUPPORTED_CONTRACT_VERSIONS]);
-  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5']);
+  assert.deepEqual([...SUPPORTED_CONTRACT_VERSIONS], ['017.1', '017.2', '017.3', '017.4', '017.5', '017.6']);
 });
 
 test('MARKET_DATA_KINDS достижим и идентичен из обеих копий', () => {
@@ -343,7 +343,7 @@ test('MARKET_DATA_KINDS достижим и идентичен из обеих �
 // CONTRACT_VERSION)` — кодировало «surface актора ВСЕГДА вводится ТЕКУЩЕЙ версией», случайный
 // инвариант этой задачи, а не требование контракта. Следующий несвязанный бамп CONTRACT_VERSION
 // (не трогающий surface event_driven) сделал бы этот тест красным на ровном месте. Опечатку в
-// самом пороге (например, `'017.6'` вместо `'017.5'`) ловит членство в SUPPORTED_CONTRACT_VERSIONS
+// самом пороге (например, `'017.9'` вместо `'017.5'`) ловит членство в SUPPORTED_CONTRACT_VERSIONS
 // — та же гарантия, но без ложной связи с CONTRACT_VERSION.
 test('EVENT_DRIVEN_MIN_CONTRACT_VERSION — валидный член SUPPORTED_CONTRACT_VERSIONS (не опечатка в пороге)', () => {
   assert.ok(
