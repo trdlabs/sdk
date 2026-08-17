@@ -99,6 +99,17 @@ npm run sdk:verify               # verify packed tarball (run after sdk:pack)
   на стороне потребителя. `1.0.0` резервируется под момент, когда поверхность стабилизируется;
   после него правило «breaking → major» действует без исключений. См. README §Versioning.
 
+### Публичная поверхность
+
+`api-surface.txt` — снимок публичной поверхности (входы из `exports` опубликованного
+тарбола). Меняешь поверхность — пересобери снимок (`npm run api:surface`) и закоммить его в
+том же PR: `npm run check` красный, если коммиченный снимок не равен регенерации.
+
+Удаление или изменение строки снимка требует minor-бампа относительно опубликованного в npm
+`latest` и секции этой версии в `CHANGELOG.md`; санкционированное исключение — строка в
+`api-breaking-allowlist.json` с причиной, ISO-датой и PR. Добавления не требуют ничего.
+Полное правило: control-center `docs/delivery/versioning-policy.md`, решение — ADR-0029.
+
 ## Downstream consumers
 - `trading-lab` — agent workflows через MCP + SDK types
 - `trading-office` — operator UI через SDK/API

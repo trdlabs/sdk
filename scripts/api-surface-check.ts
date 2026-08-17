@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { packAndExtract, renderSurface } from './api-surface.ts';
+import { packAndExtract, renderSurface } from './api-surface.js';
 
 export type Allow = { line: string; reason: string; date: string; pr: string };
 

@@ -7,7 +7,7 @@ import {
   classify,
   evaluate,
   isMinorBump,
-} from '../scripts/api-surface-check.ts';
+} from '../scripts/api-surface-check.js';
 
 const BASE = ['# @trdlabs/sdk 0.21.0', '# symbols: 2', '. const a :: number', '. const b :: number', ''].join('\n');
 const REMOVED = ['# @trdlabs/sdk 0.21.0', '# symbols: 1', '. const a :: number', ''].join('\n');

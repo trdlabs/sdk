@@ -86,6 +86,14 @@ jobs:
       - name: Verify packed SDK (verification)
         run: npm run sdk:verify
 
+      # Ярус 2 публичной поверхности (Волна 3, ADR-0029). base здесь — реестровый
+      # latest, и только он: PR-время base на main уже не существует. Диф
+      # «опубликованное → публикуемое» считается целиком, а неопределённый ответ
+      # реестра — отказ, как в assert-version-publishable выше. Стоит ДО publish:
+      # после публикации версия неизменяема, и починка возможна только вперёд.
+      - name: Fail closed unless the public surface is compatible with the published latest
+        run: npx tsx scripts/assert-surface-compatible.ts "@trdlabs/sdk" "$VERSION"
+
       # ── Publish to npm (canonical delivery channel) ────────────────────────
 
       - name: Publish to npm with provenance

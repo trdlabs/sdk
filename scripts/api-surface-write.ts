@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { packAndExtract, renderSurface } from './api-surface.ts';
+import { packAndExtract, renderSurface } from './api-surface.js';
 
 const repoDir = process.cwd();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'api-surface-'));
