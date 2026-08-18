@@ -1,0 +1,1107 @@
+# @trdlabs/sdk 0.22.0
+# symbols: 406
+. SdkCapabilityDescriptor.credentials :: false
+. SdkCapabilityDescriptor.execution :: false
+. SdkCapabilityDescriptor.ingestion :: false
+. SdkCapabilityDescriptor.live :: false
+. SdkCapabilityDescriptor.rawStorage :: false
+. const SDK_CAPABILITIES :: SdkCapabilityDescriptor
+. const SDK_VERSION :: "0.22.0"
+. interface SdkCapabilityDescriptor :: SdkCapabilityDescriptor
+. symbol CANONICAL_ROW_FIELDS :: readonly ["schema_version", "minute_ts", "symbol", "open", "high", "low", "close", "volume", "turnover", "oi_total_usd", "funding_rate", "liq_long_usd", "liq_short_usd", "has_oi", "has_funding", "has_liquidations"]
+. symbol CANONICAL_ROW_V2_FIELDS :: readonly ["schema_version", "minute_ts", "symbol", "open", "high", "low", "close", "volume", "turnover", "oi_total_usd", "funding_rate", "liq_long_usd", "liq_short_usd", "has_oi", "has_funding", "has_liquidations", "taker_buy_volume_usd", "taker_sell_volume_usd", "has_taker_flow"]
+. symbol CONTRACT_VERSION :: "017.6"
+. symbol CanonicalRow :: any
+. symbol CanonicalRowField :: any
+. symbol CanonicalRowV2 :: any
+. symbol CanonicalRowV2Field :: any
+. symbol LegacyMarketDataKind :: any
+. symbol MARKET_DATA_KINDS :: readonly ["candles", "open_interest", "liquidations", "taker_volume", "funding"]
+. symbol MARKET_KIND_RANK :: Readonly<Record<"candles" | "open_interest" | "liquidations" | "taker_volume" | "funding", number>>
+. symbol MarketDataCoverageState :: any
+. symbol MarketDataKind :: any
+. symbol SCHEMA_VERSION :: 1
+. symbol SCHEMA_VERSION_V2 :: 2
+. symbol SUPPORTED_CONTRACT_VERSIONS :: readonly ["017.1", "017.2", "017.3", "017.4", "017.5", "017.6"]
+. symbol SUPPORTED_MARKET_DATA_KINDS :: readonly ["openInterest", "liquidations", "funding", "taker"]
+./conformance HistoricalConformanceSkip.check :: string
+./conformance HistoricalConformanceSkip.reason :: string
+./conformance HistoricalConformanceTarget.baseUrl :: string
+./conformance HistoricalConformanceTarget.token? :: string | undefined
+./conformance const DAY_INTEGRITY_CONTRACT :: { readonly status: 409; readonly code: "DUPLICATE_ROW_KEY"; }
+./conformance const DAY_INTEGRITY_KEYS :: readonly ["code", "date", "error", "generation", "minuteTs", "permanent", "retryFromStart", "symbol"]
+./conformance const PREFLIGHT_CONTRACT :: Readonly<Record<AvailabilityScenario, { status: number; code: string | null; }>>
+./conformance const PREFLIGHT_REJECT_KEYS :: readonly ["availabilityState", "code", "message", "ok"]
+./conformance const PREFLIGHT_SUCCESS_KEYS :: readonly ["archiveId", "asOfMs", "availabilityId", "availableFromMs", "availableToMs", "clamped", "datasetId", "earliestAvailableDay", "effectiveFromMs", "effectiveToMs", "lastContiguousClosedDay", "ok", "requestedFromMs", "requestedToMs"]
+./conformance function runAvailabilityConformance :: (t: HistoricalConformanceTarget, scenario: AvailabilityScenario) => Promise<{ ok: true; }>
+./conformance function runDayIntegrityConformance :: (t: HistoricalConformanceTarget, seam: { readonly symbol: string; readonly date: string; readonly minuteTs: number; readonly fromMs: number; readonly toMs: number; readonly sameDayCleanWindow?: { readonly fromMs: number; readonly toMs: number; } | undefined; readonly otherSymbolSameDay?: string | undefined; readonly healthyOtherDay?: { readonly fromMs: number; readonly toMs: number; } | undefined; }) => Promise<{ ok: true; }>
+./conformance function runHistoricalConformance :: (t: HistoricalConformanceTarget, opts?: { goldenRows?: readonly CanonicalRowV2[] | undefined; onSkip?: ((skip: HistoricalConformanceSkip) => void) | undefined; maxPages?: number | undefined; } | undefined) => Promise<{ ok: true; }>
+./conformance interface HistoricalConformanceSkip :: HistoricalConformanceSkip
+./conformance interface HistoricalConformanceTarget :: HistoricalConformanceTarget
+./conformance type AvailabilityScenario :: AvailabilityScenario
+./historical HistoricalClient.prototype :: HistoricalClient
+./historical HistoricalClientOptions.baseUrl :: string
+./historical HistoricalClientOptions.fetchImpl? :: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) | undefined
+./historical HistoricalClientOptions.maxAttempts? :: number | undefined
+./historical HistoricalClientOptions.maxPages? :: number | undefined
+./historical HistoricalClientOptions.maxRows? :: number | undefined
+./historical HistoricalClientOptions.operationDeadlineMs? :: number | undefined
+./historical HistoricalClientOptions.pageLimit? :: number | undefined
+./historical HistoricalClientOptions.retryBaseMs? :: number | undefined
+./historical HistoricalClientOptions.retryMaxMs? :: number | undefined
+./historical HistoricalClientOptions.sleepImpl? :: ((ms: number) => Promise<void>) | undefined
+./historical HistoricalClientOptions.timeoutMs? :: number | undefined
+./historical HistoricalClientOptions.token? :: string | undefined
+./historical HistoricalCoverageEntry.availability :: string
+./historical HistoricalCoverageEntry.barCount :: number
+./historical HistoricalCoverageEntry.candleOrigin? :: unknown
+./historical HistoricalCoverageEntry.fromMs :: number
+./historical HistoricalCoverageEntry.symbol :: string
+./historical HistoricalCoverageEntry.timeframe :: string
+./historical HistoricalCoverageEntry.toMs :: number
+./historical HistoricalCoverageSnapshot.availability :: string
+./historical HistoricalCoverageSnapshot.entries :: readonly HistoricalCoverageEntry[]
+./historical HistoricalDiscoverResponse.capabilities? :: unknown
+./historical HistoricalDiscoverResponse.historicalContractVersion :: string
+./historical HistoricalDiscoverResponse.resources :: readonly HistoricalResourceDescriptor[]
+./historical HistoricalDiscoverResponse.symbols :: readonly string[]
+./historical HistoricalDiscoverResponse.timeframes :: readonly string[]
+./historical HistoricalResourceDescriptor.availability :: string
+./historical HistoricalResourceDescriptor.name :: string
+./historical HistoricalRowsQuery.fromMs? :: number | undefined
+./historical HistoricalRowsQuery.symbols :: readonly string[]
+./historical HistoricalRowsQuery.toMs? :: number | undefined
+./historical class HistoricalClient :: typeof HistoricalClient
+./historical interface HistoricalClientOptions :: HistoricalClientOptions
+./historical interface HistoricalCoverageEntry :: HistoricalCoverageEntry
+./historical interface HistoricalCoverageSnapshot :: HistoricalCoverageSnapshot
+./historical interface HistoricalDiscoverResponse :: HistoricalDiscoverResponse
+./historical interface HistoricalResourceDescriptor :: HistoricalResourceDescriptor
+./historical interface HistoricalRowsQuery :: HistoricalRowsQuery
+./historical symbol AVAILABILITY_STATES :: readonly ["ready", "empty", "not_initialized", "invalid"]
+./historical symbol CANDLE_ORIGIN_ARCHIVE_REASONS :: readonly ["no_files", "not_declared", "invalid_value"]
+./historical symbol CANDLE_ORIGIN_CHANNEL_REASONS :: readonly ["not_reported", "malformed"]
+./historical symbol CANONICAL_ROW_FIELDS :: readonly ["schema_version", "minute_ts", "symbol", "open", "high", "low", "close", "volume", "turnover", "oi_total_usd", "funding_rate", "liq_long_usd", "liq_short_usd", "has_oi", "has_funding", "has_liquidations"]
+./historical symbol CANONICAL_ROW_V2_FIELDS :: readonly ["schema_version", "minute_ts", "symbol", "open", "high", "low", "close", "volume", "turnover", "oi_total_usd", "funding_rate", "liq_long_usd", "liq_short_usd", "has_oi", "has_funding", "has_liquidations", "taker_buy_volume_usd", "taker_sell_volume_usd", "has_taker_flow"]
+./historical symbol CandleOrigin :: any
+./historical symbol CandleOriginUnknownReason :: any
+./historical symbol CanonicalRow :: any
+./historical symbol CanonicalRowField :: any
+./historical symbol CanonicalRowV2 :: any
+./historical symbol CanonicalRowV2Field :: any
+./historical symbol DAY_INTEGRITY_CODE :: "DUPLICATE_ROW_KEY"
+./historical symbol DAY_INTEGRITY_STATUS :: 409
+./historical symbol DayIntegrityViolation :: any
+./historical symbol DigestRow :: any
+./historical symbol HistoricalAvailability :: any
+./historical symbol HistoricalDayIntegrityError :: typeof HistoricalDayIntegrityError
+./historical symbol PREFLIGHT_REJECT_CODES :: readonly PreflightRejectCode[]
+./historical symbol PREFLIGHT_STATUS_BY_CODE :: Readonly<Record<PreflightRejectCode, number>>
+./historical symbol PRICE_SOURCE_VENUES :: readonly ["aster", "binance", "bitget", "bybit", "hyperliquid", "okx"]
+./historical symbol PreflightReject :: any
+./historical symbol PreflightRejectCode :: any
+./historical symbol PreflightResult :: any
+./historical symbol PreflightSuccess :: any
+./historical symbol PriceSourceVenue :: any
+./historical symbol ResultDigest :: any
+./historical symbol ResultDigestError :: typeof ResultDigestError
+./historical symbol ResultDigestFailure :: any
+./historical symbol ResultExpectation :: any
+./historical symbol SCHEMA_VERSION :: 1
+./historical symbol SCHEMA_VERSION_V2 :: 2
+./historical symbol canonicalRowLine :: (row: Readonly<Record<string, unknown>>) => string
+./historical symbol checkAgainstExpectation :: (digest: ResultDigest, expectation: ResultExpectation) => string[]
+./historical symbol checkParity :: (digests: readonly { readonly path: string; readonly digest: ResultDigest; }[], expectation: ResultExpectation) => string[]
+./historical symbol classifyDayIntegrityResponse :: (status: number, body: unknown) => DayIntegrityViolation | null
+./historical symbol classifyPreflightResponse :: (status: number, body: unknown) => PreflightResult | null
+./historical symbol computeResultDigest :: (rows: readonly Readonly<Record<string, unknown>>[]) => ResultDigest
+./historical symbol coverageEntryCandleOrigin :: (entry: { readonly candleOrigin?: unknown; }) => CandleOrigin
+./historical symbol digestsAgree :: (a: ResultDigest, b: ResultDigest) => boolean
+./historical symbol isPreflightRejectCode :: (v: unknown) => v is PreflightRejectCode
+./historical symbol isPriceSourceVenue :: (v: unknown) => v is "aster" | "binance" | "bitget" | "bybit" | "hyperliquid" | "okx"
+./historical symbol parseAvailabilityDescriptor :: (raw: unknown) => HistoricalAvailability
+./historical symbol parseCandleOrigin :: (raw: unknown) => CandleOrigin
+./intake IntakeError.category :: IntakeErrorCategory
+./intake IntakeError.code :: string
+./intake IntakeError.message :: string
+./intake PaperCandidateEvidenceInput.artifactRefs? :: readonly string[] | undefined
+./intake PaperCandidateEvidenceInput.baselineRunId :: string
+./intake PaperCandidateEvidenceInput.comparisonSnapshot? :: Record<string, unknown> | null | undefined
+./intake PaperCandidateEvidenceInput.datasetRef :: string
+./intake PaperCandidateEvidenceInput.evaluationVerdict :: { readonly recommendationForPaper: boolean; readonly summary: string; }
+./intake PaperCandidateEvidenceInput.externalEvidenceRef? :: string | null | undefined
+./intake PaperCandidateEvidenceInput.improvementSummary? :: string | null | undefined
+./intake PaperCandidateEvidenceInput.metricsSnapshot :: Record<string, unknown>
+./intake PaperCandidateEvidenceInput.riskNotes? :: string | null | undefined
+./intake PaperCandidateEvidenceInput.symbols :: readonly string[]
+./intake PaperCandidateEvidenceInput.timeframe :: string
+./intake PaperCandidateEvidenceInput.variantRunId :: string
+./intake PaperCandidateEvidenceInput.window :: { readonly fromMs: number; readonly toMs: number; }
+./intake PaperCandidateEvidenceRefs.artifactRefCount :: number
+./intake PaperCandidateEvidenceRefs.baselineRunId :: string
+./intake PaperCandidateEvidenceRefs.datasetRef :: string
+./intake PaperCandidateEvidenceRefs.hasExternalEvidenceRef :: boolean
+./intake PaperCandidateEvidenceRefs.symbols :: readonly string[]
+./intake PaperCandidateEvidenceRefs.timeframe :: string
+./intake PaperCandidateEvidenceRefs.variantRunId :: string
+./intake PaperCandidateIntakeRequest.agentDecision :: "recommendation_for_paper"
+./intake PaperCandidateIntakeRequest.correlationId? :: string | undefined
+./intake PaperCandidateIntakeRequest.createdBy? :: string | undefined
+./intake PaperCandidateIntakeRequest.evidence :: PaperCandidateEvidenceInput
+./intake PaperCandidateIntakeRequest.governance? :: Record<string, unknown> | undefined
+./intake PaperCandidateIntakeRequest.idempotencyKey? :: string | undefined
+./intake PaperCandidateIntakeRequest.proposedRiskProfile? :: Record<string, unknown> | null | undefined
+./intake PaperCandidateIntakeRequest.source :: CandidateSource
+./intake PaperCandidateIntakeRequest.sourceRecommendationId? :: string | undefined
+./intake PaperCandidateIntakeRequest.strategy :: PaperCandidateStrategyInput
+./intake PaperCandidateIntakeRequest.supersedes? :: string | undefined
+./intake PaperCandidateIntakeRequest.traceId? :: string | undefined
+./intake PaperCandidateIntakeRequest.workflowId? :: string | undefined
+./intake PaperCandidateReadView.admissionOutcome :: AdmissionOutcome
+./intake PaperCandidateReadView.admissionReasonCode :: string | null
+./intake PaperCandidateReadView.admissionStatus :: AdmissionStatus
+./intake PaperCandidateReadView.admittedAtMs :: number | null
+./intake PaperCandidateReadView.agentDecision :: "recommendation_for_paper"
+./intake PaperCandidateReadView.asOf :: number
+./intake PaperCandidateReadView.candidateId :: string
+./intake PaperCandidateReadView.createdAtMs :: number
+./intake PaperCandidateReadView.evidenceRefs :: PaperCandidateEvidenceRefs
+./intake PaperCandidateReadView.quarantinedAtMs :: number | null
+./intake PaperCandidateReadView.rejectedAtMs :: number | null
+./intake PaperCandidateReadView.source :: CandidateSource
+./intake PaperCandidateReadView.supersededAtMs :: number | null
+./intake PaperCandidateReadView.supersededBy :: string | null
+./intake PaperCandidateStrategyInput.moduleBundleHash? :: string | null | undefined
+./intake PaperCandidateStrategyInput.moduleRef? :: string | null | undefined
+./intake PaperCandidateStrategyInput.params? :: Record<string, unknown> | null | undefined
+./intake PaperCandidateStrategyInput.side? :: "long" | "short" | null | undefined
+./intake PaperCandidateStrategyInput.strategyName? :: string | null | undefined
+./intake PaperCandidateStrategyInput.strategyProfileRef? :: string | null | undefined
+./intake interface IntakeError :: IntakeError
+./intake interface PaperCandidateEvidenceInput :: PaperCandidateEvidenceInput
+./intake interface PaperCandidateEvidenceRefs :: PaperCandidateEvidenceRefs
+./intake interface PaperCandidateIntakeRequest :: PaperCandidateIntakeRequest
+./intake interface PaperCandidateReadView :: PaperCandidateReadView
+./intake interface PaperCandidateStrategyInput :: PaperCandidateStrategyInput
+./intake symbol INTAKE_ERROR_CATEGORIES :: readonly ["validation_error", "not_found", "conflict", "unsupported_query", "internal_error"]
+./intake symbol IntakeTransport :: any
+./intake symbol classifyIntakeError :: (error: IntakeError) => IntakeErrorCategory
+./intake symbol submitPaperCandidate :: (transport: IntakeTransport, request: PaperCandidateIntakeRequest) => Promise<PaperCandidateIntakeResult>
+./intake type AdmissionOutcome :: AdmissionOutcome
+./intake type AdmissionStatus :: AdmissionStatus
+./intake type AgentDecision :: "recommendation_for_paper"
+./intake type CandidateSource :: CandidateSource
+./intake type EvidenceAnchor :: PaperCandidateEvidenceInput
+./intake type IdempotencyKey :: string
+./intake type IntakeErrorCategory :: IntakeErrorCategory
+./intake type OpaqueId :: string
+./intake type PaperCandidateIntakeResult :: PaperCandidateIntakeResult
+./intake/http-transport HttpIntakeTransportOptions.baseUrl :: string
+./intake/http-transport HttpIntakeTransportOptions.fetch? :: FetchLike | undefined
+./intake/http-transport HttpIntakeTransportOptions.token? :: string | undefined
+./intake/http-transport function createHttpIntakeTransport :: (opts: HttpIntakeTransportOptions) => IntakeTransport
+./intake/http-transport interface HttpIntakeTransportOptions :: HttpIntakeTransportOptions
+./intake/http-transport type FetchLike :: FetchLike
+./ops-read BotRunRecord.bundleId :: string | null
+./ops-read BotRunRecord.finishedAtMs :: number | null
+./ops-read BotRunRecord.lastSeenMs :: number
+./ops-read BotRunRecord.mode :: BotMode
+./ops-read BotRunRecord.runId :: string
+./ops-read BotRunRecord.startedAtMs :: number
+./ops-read BotRunRecord.status :: BotRunStatus
+./ops-read BotRunRecord.strategy :: BotRunStrategyRef
+./ops-read BotRunRecord.symbols :: readonly string[]
+./ops-read BotRunStrategyRef.name :: string
+./ops-read BotRunStrategyRef.version :: string
+./ops-read ClosedTrade.closeReason :: CloseReason | null
+./ops-read ClosedTrade.closeReasonRaw :: string | null
+./ops-read ClosedTrade.closedAtMs :: number | null
+./ops-read ClosedTrade.entryPrice :: string | null
+./ops-read ClosedTrade.exitPrice :: string | null
+./ops-read ClosedTrade.isWin :: boolean | null
+./ops-read ClosedTrade.openedAtMs :: number
+./ops-read ClosedTrade.pnlPct :: string
+./ops-read ClosedTrade.realizedPnl :: string
+./ops-read ClosedTrade.runId :: string
+./ops-read ClosedTrade.side :: TradeSide
+./ops-read ClosedTrade.symbol :: string
+./ops-read ClosedTrade.tradeId :: string
+./ops-read ClosedTradesAggregate.avgPnl :: string
+./ops-read ClosedTradesAggregate.breakeven :: number
+./ops-read ClosedTradesAggregate.closedTrades :: number
+./ops-read ClosedTradesAggregate.exitReasons :: Record<string, number>
+./ops-read ClosedTradesAggregate.losses :: number
+./ops-read ClosedTradesAggregate.pnlUsd :: string
+./ops-read ClosedTradesAggregate.winratePct :: number
+./ops-read ClosedTradesAggregate.wins :: number
+./ops-read DecisionLogEntry.botId :: string
+./ops-read DecisionLogEntry.category :: string
+./ops-read DecisionLogEntry.reason :: string
+./ops-read DecisionLogEntry.runId :: string
+./ops-read DecisionLogEntry.safeMessage :: string
+./ops-read DecisionLogEntry.side :: TradeSide
+./ops-read DecisionLogEntry.symbol :: string
+./ops-read DecisionLogEntry.tsMs :: number
+./ops-read OperationalEvent.category :: string
+./ops-read OperationalEvent.runId :: string
+./ops-read OperationalEvent.safeMessage :: string
+./ops-read OperationalEvent.severity :: OpsSeverity | null
+./ops-read OperationalEvent.tradeId :: string | null
+./ops-read OperationalEvent.tsMs :: number
+./ops-read RunSummary.asOf :: number
+./ops-read RunSummary.avgPnl :: string
+./ops-read RunSummary.breakeven :: number
+./ops-read RunSummary.closedTrades :: number
+./ops-read RunSummary.excludesReconcile :: boolean
+./ops-read RunSummary.exitReasons :: Record<string, number>
+./ops-read RunSummary.losses :: number
+./ops-read RunSummary.pnlUsd :: string
+./ops-read RunSummary.runId :: string
+./ops-read RunSummary.winratePct :: number
+./ops-read RunSummary.wins :: number
+./ops-read TradeEvidence.closeReason :: CloseReason | null
+./ops-read TradeEvidence.closeReasonRaw :: string | null
+./ops-read TradeEvidence.closedAtMs :: number | null
+./ops-read TradeEvidence.entryPrice :: string | null
+./ops-read TradeEvidence.exitPrice :: string | null
+./ops-read TradeEvidence.lifecycle :: readonly TradeLifecycleEvent[]
+./ops-read TradeEvidence.openedAtMs :: number
+./ops-read TradeEvidence.pnlPct :: string
+./ops-read TradeEvidence.realizedPnl :: string
+./ops-read TradeEvidence.runId :: string
+./ops-read TradeEvidence.side :: TradeSide
+./ops-read TradeEvidence.symbol :: string
+./ops-read TradeEvidence.tradeId :: string
+./ops-read TradeLifecycleEvent.note? :: string | null | undefined
+./ops-read TradeLifecycleEvent.price :: string | null
+./ops-read TradeLifecycleEvent.qty :: string | null
+./ops-read TradeLifecycleEvent.tsMs :: number
+./ops-read TradeLifecycleEvent.type :: OpsTradeLifecycleEventType
+./ops-read interface BotRunRecord :: BotRunRecord
+./ops-read interface BotRunStrategyRef :: BotRunStrategyRef
+./ops-read interface ClosedTrade :: ClosedTrade
+./ops-read interface ClosedTradesAggregate :: ClosedTradesAggregate
+./ops-read interface DecisionLogEntry :: DecisionLogEntry
+./ops-read interface OperationalEvent :: OperationalEvent
+./ops-read interface RunSummary :: RunSummary
+./ops-read interface TradeEvidence :: TradeEvidence
+./ops-read interface TradeLifecycleEvent :: TradeLifecycleEvent
+./ops-read symbol OPS_READ_CONTRACT_VERSION :: "ops.6"
+./ops-read symbol OpsReadContractVersion :: any
+./ops-read type BotMode :: BotMode
+./ops-read type BotRunStatus :: BotRunStatus
+./ops-read type CloseReason :: CloseReason
+./ops-read type OpsSeverity :: OpsSeverity
+./ops-read type OpsTradeLifecycleEventType :: OpsTradeLifecycleEventType
+./ops-read type TradeSide :: TradeSide
+./research-contract ActorAnnotateCommand.kind :: "annotate"
+./research-contract ActorAnnotateCommand.note :: string
+./research-contract ActorAnnotateCommand.tags? :: readonly string[] | undefined
+./research-contract ActorBudgets.perDispatch :: ActorDispatchBudget
+./research-contract ActorBudgets.perFrontier :: ActorCumulativeFrontierBudget
+./research-contract ActorCancelCommand.clientOrderId :: string
+./research-contract ActorCancelCommand.kind :: "cancel"
+./research-contract ActorContext.clock :: { nowUs(): TimestampUs; }
+./research-contract ActorContext.orders :: { readonly open: () => readonly OpenOrderView[]; }
+./research-contract ActorContext.position :: () => PositionView | undefined
+./research-contract ActorContext.readiness :: ActorReadiness
+./research-contract ActorContext.rng :: ActorRng
+./research-contract ActorContext.tradingState :: TradingState
+./research-contract ActorCumulativeFrontierBudget.maxCascadeDepth :: number
+./research-contract ActorCumulativeFrontierBudget.maxEventsPerFrontier :: number
+./research-contract ActorDispatchBudget.maxCommandsPerBatch? :: number | undefined
+./research-contract ActorDispatchBudget.maxCpuUs? :: DurationUs | undefined
+./research-contract ActorDispatchBudget.maxWallUs? :: DurationUs | undefined
+./research-contract ActorEnvelope.event :: E
+./research-contract ActorEnvelope.eventTsUs :: TimestampUs
+./research-contract ActorEnvelope.seq :: number
+./research-contract ActorEnvelope.subscriptionId :: string
+./research-contract ActorFillEvent.clientOrderId :: string
+./research-contract ActorFillEvent.fee :: number
+./research-contract ActorFillEvent.kind :: "fill"
+./research-contract ActorFillEvent.last :: boolean
+./research-contract ActorFillEvent.price :: number
+./research-contract ActorFillEvent.qty :: number
+./research-contract ActorHostSourceDescriptor.kind :: "host"
+./research-contract ActorHostSourceDescriptor.subscriptionId :: string
+./research-contract ActorInit.budgets? :: ActorBudgets | undefined
+./research-contract ActorInit.params :: Readonly<Record<string, unknown>>
+./research-contract ActorInit.seed :: number
+./research-contract ActorInit.state? :: S | undefined
+./research-contract ActorInit.subscriptions :: readonly ActorSubscriptionDescriptor[]
+./research-contract ActorInit.symbol :: string
+./research-contract ActorMarketSourceDescriptor.kind :: "candles" | "open_interest" | "liquidations" | "taker_volume" | "funding"
+./research-contract ActorMarketSourceDescriptor.requirementId :: string
+./research-contract ActorMarketSourceDescriptor.subscriptionId :: string
+./research-contract ActorOrderAcceptedEvent.clientOrderId :: string
+./research-contract ActorOrderAcceptedEvent.kind :: "order.accepted"
+./research-contract ActorOrderCancelRejectedEvent.clientOrderId :: string
+./research-contract ActorOrderCancelRejectedEvent.kind :: "cancel.rejected"
+./research-contract ActorOrderCancelRejectedEvent.reason :: string
+./research-contract ActorOrderCanceledEvent.clientOrderId :: string
+./research-contract ActorOrderCanceledEvent.kind :: "order.canceled"
+./research-contract ActorOrderDeniedEvent.clientOrderId :: string
+./research-contract ActorOrderDeniedEvent.kind :: "order.denied"
+./research-contract ActorOrderDeniedEvent.reason :: string
+./research-contract ActorOrderExpiredEvent.clientOrderId :: string
+./research-contract ActorOrderExpiredEvent.kind :: "order.expired"
+./research-contract ActorOrderRejectedEvent.clientOrderId :: string
+./research-contract ActorOrderRejectedEvent.kind :: "order.rejected"
+./research-contract ActorOrderRejectedEvent.reason :: string
+./research-contract ActorPlaceLimitCommand.clientOrderId :: string
+./research-contract ActorPlaceLimitCommand.kind :: "place"
+./research-contract ActorPlaceLimitCommand.price :: number
+./research-contract ActorPlaceLimitCommand.qtyUsd :: number
+./research-contract ActorPlaceLimitCommand.rationale? :: string | undefined
+./research-contract ActorPlaceLimitCommand.reduceOnly? :: boolean | undefined
+./research-contract ActorPlaceLimitCommand.side :: OrderSide
+./research-contract ActorPlaceLimitCommand.tags? :: readonly string[] | undefined
+./research-contract ActorPlaceLimitCommand.tif? :: TimeInForce | undefined
+./research-contract ActorPlaceLimitCommand.type :: "limit"
+./research-contract ActorPlaceMarketCommand.clientOrderId :: string
+./research-contract ActorPlaceMarketCommand.kind :: "place"
+./research-contract ActorPlaceMarketCommand.qtyUsd :: number
+./research-contract ActorPlaceMarketCommand.rationale? :: string | undefined
+./research-contract ActorPlaceMarketCommand.reduceOnly? :: boolean | undefined
+./research-contract ActorPlaceMarketCommand.side :: OrderSide
+./research-contract ActorPlaceMarketCommand.tags? :: readonly string[] | undefined
+./research-contract ActorPlaceMarketCommand.tif? :: TimeInForce | undefined
+./research-contract ActorPlaceMarketCommand.type :: "market"
+./research-contract ActorPlaceStopMarketCommand.clientOrderId :: string
+./research-contract ActorPlaceStopMarketCommand.kind :: "place"
+./research-contract ActorPlaceStopMarketCommand.qtyUsd :: number
+./research-contract ActorPlaceStopMarketCommand.rationale? :: string | undefined
+./research-contract ActorPlaceStopMarketCommand.reduceOnly? :: boolean | undefined
+./research-contract ActorPlaceStopMarketCommand.side :: OrderSide
+./research-contract ActorPlaceStopMarketCommand.stopPrice :: number
+./research-contract ActorPlaceStopMarketCommand.tags? :: readonly string[] | undefined
+./research-contract ActorPlaceStopMarketCommand.tif? :: TimeInForce | undefined
+./research-contract ActorPlaceStopMarketCommand.type :: "stop_market"
+./research-contract ActorRng.next :: () => number
+./research-contract ActorTimerCancelCommand.kind :: "timer.cancel"
+./research-contract ActorTimerCancelCommand.timerId :: string
+./research-contract ActorTimerFiredEvent.dueTsUs :: TimestampUs
+./research-contract ActorTimerFiredEvent.kind :: "timer.fired"
+./research-contract ActorTimerFiredEvent.timerId :: string
+./research-contract ActorTimerSetAfterCommand.afterUs :: DurationUs
+./research-contract ActorTimerSetAfterCommand.kind :: "timer.set"
+./research-contract ActorTimerSetAfterCommand.timerId :: string
+./research-contract ActorTimerSetAtCommand.atTs :: TimestampUs
+./research-contract ActorTimerSetAtCommand.kind :: "timer.set"
+./research-contract ActorTimerSetAtCommand.timerId :: string
+./research-contract ActorTradingStateChangedEvent.kind :: "trading_state.changed"
+./research-contract ActorTradingStateChangedEvent.previous :: TradingState
+./research-contract ActorTradingStateChangedEvent.state :: TradingState
+./research-contract AddToPositionDecision.kind :: "add_to_position"
+./research-contract AddToPositionDecision.mode :: "dca" | "scale_in"
+./research-contract AddToPositionDecision.sizingHint? :: number | undefined
+./research-contract AnnotateDecision.kind :: "annotate"
+./research-contract AnnotateDecision.metrics? :: object | undefined
+./research-contract AnnotateDecision.rationale? :: string | undefined
+./research-contract AnnotateDecision.tags? :: readonly string[] | undefined
+./research-contract BacktestRunRequest.artifacts? :: readonly string[] | undefined
+./research-contract BacktestRunRequest.datasetRef :: string
+./research-contract BacktestRunRequest.executionProfileRef? :: Ref | undefined
+./research-contract BacktestRunRequest.metrics :: readonly string[]
+./research-contract BacktestRunRequest.mode :: "research" | "review" | "promotion"
+./research-contract BacktestRunRequest.moduleRef :: Ref
+./research-contract BacktestRunRequest.overlayRefs? :: readonly Ref[] | undefined
+./research-contract BacktestRunRequest.parameterGrid? :: object | undefined
+./research-contract BacktestRunRequest.params? :: object | undefined
+./research-contract BacktestRunRequest.period :: RunPeriod
+./research-contract BacktestRunRequest.realityModelRef? :: Ref | undefined
+./research-contract BacktestRunRequest.riskProfileRef? :: Ref | undefined
+./research-contract BacktestRunRequest.robustnessChecks? :: readonly string[] | undefined
+./research-contract BacktestRunRequest.runId :: string
+./research-contract BacktestRunRequest.seed :: number
+./research-contract BacktestRunRequest.symbols :: readonly string[]
+./research-contract BacktestRunRequest.timeframe :: string
+./research-contract BacktestRunResult.artifactRefs :: readonly string[]
+./research-contract BacktestRunResult.decisionRecords :: readonly object[]
+./research-contract BacktestRunResult.evidence :: object
+./research-contract BacktestRunResult.metrics :: Readonly<Record<string, number>>
+./research-contract BacktestRunResult.runId :: string
+./research-contract BacktestRunResult.summary :: object
+./research-contract BacktestRunResult.trades :: readonly object[]
+./research-contract BacktestRunResult.validationIssues :: readonly object[]
+./research-contract Bar.close :: number
+./research-contract Bar.high :: number
+./research-contract Bar.low :: number
+./research-contract Bar.open :: number
+./research-contract Bar.ts :: number
+./research-contract Bar.volume :: number
+./research-contract BarCloseEvent.bar :: Bar
+./research-contract BarCloseEvent.kind :: "bar_close"
+./research-contract BarCloseEvent.symbol :: string
+./research-contract BarCloseEvent.ts :: number
+./research-contract BollingerValue.lower :: number
+./research-contract BollingerValue.middle :: number
+./research-contract BollingerValue.upper :: number
+./research-contract BoundRealityModelReadInput.executionProfile :: ExecutionProfile
+./research-contract BoundRealityModelReadInput.realityModel? :: RealityModel | undefined
+./research-contract BoundRealityModelReadInput.realityModelRef :: Ref
+./research-contract Bounds.max :: number
+./research-contract Bounds.min :: number
+./research-contract CandleValue.close :: number
+./research-contract CandleValue.high :: number
+./research-contract CandleValue.low :: number
+./research-contract CandleValue.open :: number
+./research-contract CandleValue.volume :: number
+./research-contract CapabilityDeclaration.brokerDirect? :: boolean | undefined
+./research-contract CapabilityDeclaration.dynamicEval? :: boolean | undefined
+./research-contract CapabilityDeclaration.env? :: boolean | undefined
+./research-contract CapabilityDeclaration.exchangeDirect? :: boolean | undefined
+./research-contract CapabilityDeclaration.filesystem? :: boolean | undefined
+./research-contract CapabilityDeclaration.network? :: boolean | undefined
+./research-contract CapabilityDeclaration.platformSdk? :: boolean | undefined
+./research-contract CapabilityDeclaration.process? :: boolean | undefined
+./research-contract ContractContext.forbiddenCapabilities :: readonly string[]
+./research-contract ContractContext.knownStrategyRefs :: readonly string[]
+./research-contract ContractContext.metricCatalog :: MetricCatalog
+./research-contract ContractContext.robustnessCatalog :: readonly string[]
+./research-contract ContractContext.supportedContractVersions :: readonly string[]
+./research-contract ContractContext.supportedMarketDataKinds :: readonly string[]
+./research-contract CoverageModel.entries :: readonly KindCoverage[]
+./research-contract DataNeedsDeclaration.asOfIndicators? :: boolean | undefined
+./research-contract DataNeedsDeclaration.closedCandlesUpToCurrent? :: boolean | undefined
+./research-contract DataNeedsDeclaration.forwardBars? :: boolean | undefined
+./research-contract DataNeedsDeclaration.forwardWindow? :: boolean | undefined
+./research-contract DataNeedsDeclaration.funding? :: boolean | undefined
+./research-contract DataNeedsDeclaration.labeling? :: boolean | undefined
+./research-contract DataNeedsDeclaration.liquidations? :: boolean | undefined
+./research-contract DataNeedsDeclaration.openInterest? :: boolean | undefined
+./research-contract DataNeedsDeclaration.oracle? :: boolean | undefined
+./research-contract DataNeedsDeclaration.postTradeOutcome? :: boolean | undefined
+./research-contract DataNeedsDeclaration.taker? :: boolean | undefined
+./research-contract DataNeedsDeclaration.uncontrolledRandom? :: boolean | undefined
+./research-contract DataNeedsDeclaration.wallClock? :: boolean | undefined
+./research-contract DeclaredDatasetSplice.boundaryTsUs :: TimestampUs
+./research-contract DeclaredDatasetSplice.fromDatasetId :: string
+./research-contract DeclaredDatasetSplice.rationale :: string
+./research-contract DeclaredDatasetSplice.toDatasetId :: string
+./research-contract DeclaredRevisionSkipPolicy.allowed :: true
+./research-contract DeclaredRevisionSkipPolicy.rationale :: string
+./research-contract EmbeddedRealityModelReadInput.executionProfile :: ExecutionProfile
+./research-contract EmbeddedRealityModelReadInput.realityModel? :: undefined
+./research-contract EmbeddedRealityModelReadInput.realityModelRef? :: undefined
+./research-contract EnterDecision.entry? :: object | undefined
+./research-contract EnterDecision.evidenceRefs? :: readonly string[] | undefined
+./research-contract EnterDecision.kind :: "enter"
+./research-contract EnterDecision.rationale? :: string | undefined
+./research-contract EnterDecision.side :: "long" | "short"
+./research-contract EnterDecision.sizingHint? :: number | undefined
+./research-contract EnterDecision.stop? :: number | undefined
+./research-contract EnterDecision.tags? :: readonly string[] | undefined
+./research-contract EnterDecision.take? :: number | undefined
+./research-contract EnterDecision.ttl? :: number | undefined
+./research-contract EventDrivenModule.createActor :: (init: ActorInit<S>) => StrategyActor<S>
+./research-contract ExecutionLedgerFillEntry.clientOrderId :: string
+./research-contract ExecutionLedgerFillEntry.fee :: number
+./research-contract ExecutionLedgerFillEntry.kind :: "fill"
+./research-contract ExecutionLedgerFillEntry.last :: boolean
+./research-contract ExecutionLedgerFillEntry.price :: number
+./research-contract ExecutionLedgerFillEntry.qty :: number
+./research-contract ExecutionLedgerFillEntry.side :: OrderSide
+./research-contract ExecutionLedgerFillEntry.ts :: TimestampUs
+./research-contract ExecutionLedgerFundingSettlementEntry.amount :: number
+./research-contract ExecutionLedgerFundingSettlementEntry.kind :: "funding_settlement"
+./research-contract ExecutionLedgerFundingSettlementEntry.ts :: TimestampUs
+./research-contract ExecutionProfile.bracketPolicy? :: object | undefined
+./research-contract ExecutionProfile.feeModel? :: FixedBpsFeeModel | undefined
+./research-contract ExecutionProfile.fillModel? :: FillModel | undefined
+./research-contract ExecutionProfile.fundingModel? :: PerMinuteProrateFundingModel | undefined
+./research-contract ExecutionProfile.id :: string
+./research-contract ExecutionProfile.latency? :: ZeroLatencyModel | undefined
+./research-contract ExecutionProfile.orderType? :: OrderType | undefined
+./research-contract ExecutionProfile.partialFill? :: NoPartialFillModel | undefined
+./research-contract ExecutionProfile.slippageModel? :: FixedBpsSlippageModel | undefined
+./research-contract ExecutionProfile.timeInForce? :: TimeInForce | undefined
+./research-contract ExecutionProfile.version :: string
+./research-contract ExitDecision.kind :: "exit"
+./research-contract ExitDecision.percent? :: number | undefined
+./research-contract ExitDecision.reason? :: string | undefined
+./research-contract ExitDecision.target :: string
+./research-contract FixedBpsFeeModel.bps :: number
+./research-contract FixedBpsFeeModel.kind :: "fixed_bps"
+./research-contract FixedBpsSlippageModel.bps :: number
+./research-contract FixedBpsSlippageModel.kind :: "fixed_bps"
+./research-contract FundingPoint.fundingRate :: number
+./research-contract FundingPoint.ts :: number
+./research-contract FundingSnapshot.fundingRate :: number
+./research-contract FundingSnapshot.ts :: number
+./research-contract FundingSnapshotEvent.funding :: FundingSnapshot
+./research-contract FundingSnapshotEvent.kind :: "funding_snapshot"
+./research-contract FundingSnapshotEvent.symbol :: string
+./research-contract FundingSnapshotEvent.ts :: number
+./research-contract FundingValue.fundingRate :: number
+./research-contract HypothesisBrief.constraints? :: readonly string[] | undefined
+./research-contract HypothesisBrief.expectedEffect? :: string | undefined
+./research-contract HypothesisBrief.intuition? :: string | undefined
+./research-contract HypothesisBrief.statement :: string
+./research-contract HypothesisBrief.targetStrategyRef? :: string | null | undefined
+./research-contract HypothesisOverlayModule.apply :: (ctx: StrategyContext) => OverlayDecision | readonly OverlayDecision[] | null
+./research-contract HypothesisOverlayModule.manifest :: ModuleManifest
+./research-contract IdleDecision.kind :: "idle"
+./research-contract IndicatorApi.query :: (request: IndicatorRequest) => IndicatorValue | undefined
+./research-contract IndicatorApi.value :: (name: string, ...args: readonly number[]) => number | undefined
+./research-contract IndicatorDefinition.name :: string
+./research-contract IndicatorDefinition.outputShape :: OutputShape
+./research-contract IndicatorDefinition.paramsSchema :: Readonly<Record<string, ParamSpec>>
+./research-contract IndicatorDefinition.sourceFields :: readonly SourceField[]
+./research-contract IndicatorDefinition.warmup :: (params: Readonly<Record<string, number>>) => number
+./research-contract IndicatorIssue.code :: IndicatorValidationCode
+./research-contract IndicatorIssue.message :: string
+./research-contract IndicatorIssue.path :: string
+./research-contract IndicatorIssue.severity :: "error" | "warning"
+./research-contract IndicatorRequest.name :: string
+./research-contract IndicatorRequest.params? :: Readonly<Record<string, number>> | undefined
+./research-contract IndicatorRequest.source? :: SourceField | undefined
+./research-contract IndicatorValidationResult.issues :: readonly IndicatorIssue[]
+./research-contract IndicatorValidationResult.status :: "rejected" | "accepted"
+./research-contract InstrumentRef.symbol :: string
+./research-contract InstrumentRef.venue :: string
+./research-contract IntentSnapshot.createdTs :: number
+./research-contract IntentSnapshot.kind :: string
+./research-contract IntentSnapshot.side? :: "long" | "short" | undefined
+./research-contract KindCoverage.coveredMinutes :: number
+./research-contract KindCoverage.gapMinutes :: number
+./research-contract KindCoverage.gaps :: readonly MarketDataGap[]
+./research-contract KindCoverage.kind :: LegacyMarketDataKind
+./research-contract KindCoverage.present :: boolean
+./research-contract KindCoverage.state? :: MarketDataCoverageState | undefined
+./research-contract KindCoverage.symbol :: string
+./research-contract LiqPoint.longUsd :: number
+./research-contract LiqPoint.shortUsd :: number
+./research-contract LiqPoint.ts :: number
+./research-contract LiqSnapshotEvent.kind :: "liq_snapshot"
+./research-contract LiqSnapshotEvent.liq :: LiquidationSnapshot
+./research-contract LiqSnapshotEvent.symbol :: string
+./research-contract LiqSnapshotEvent.ts :: number
+./research-contract LiquidationSnapshot.longUsd :: number
+./research-contract LiquidationSnapshot.shortUsd :: number
+./research-contract LiquidationSnapshot.ts :: number
+./research-contract LiquidationsValue.longUsd :: number
+./research-contract LiquidationsValue.shortUsd :: number
+./research-contract MacdValue.histogram :: number
+./research-contract MacdValue.macd :: number
+./research-contract MacdValue.signal :: number
+./research-contract MarketCandleClosedEvent.candle :: ObservedValue<CandleValue>
+./research-contract MarketCandleClosedEvent.kind :: "market.candle.closed"
+./research-contract MarketDataGap.tsFrom :: number
+./research-contract MarketDataGap.tsTo :: number
+./research-contract MarketFundingObservedEvent.funding :: ObservedValue<FundingValue>
+./research-contract MarketFundingObservedEvent.kind :: "market.funding.observed"
+./research-contract MarketLiquidationsBucketClosedEvent.kind :: "market.liquidations.bucket_closed"
+./research-contract MarketLiquidationsBucketClosedEvent.liq :: ObservedValue<LiquidationsValue>
+./research-contract MarketOpenInterestObservedEvent.kind :: "market.open_interest.observed"
+./research-contract MarketOpenInterestObservedEvent.oi :: ObservedValue<OpenInterestValue>
+./research-contract MarketSubscriptionStatusChangedEvent.kind :: "market.subscription.status_changed"
+./research-contract MarketSubscriptionStatusChangedEvent.status :: { readonly state: "gap"; readonly expectedTsUs: TimestampUs; readonly lastObservedTsUs?: TimestampUs | undefined; }
+./research-contract MarketTakerVolumeBucketClosedEvent.kind :: "market.taker_volume.bucket_closed"
+./research-contract MarketTakerVolumeBucketClosedEvent.taker :: ObservedValue<TakerVolumeValue>
+./research-contract MarketTape.datasetRef :: string
+./research-contract MarketTape.events :: readonly MarketTapeEvent[]
+./research-contract MarketTape.symbols :: readonly string[]
+./research-contract MarketTape.timeframe :: string
+./research-contract MarketTapeDataset.candles :: (symbol: string) => readonly Readonly<Bar>[]
+./research-contract MarketTapeDataset.coverage :: () => CoverageModel
+./research-contract MarketTapeDataset.datasetRef :: string
+./research-contract MarketTapeDataset.funding :: (symbol: string) => MinuteColumn<FundingSnapshot> | undefined
+./research-contract MarketTapeDataset.liquidations :: (symbol: string) => MinuteColumn<LiquidationSnapshot> | undefined
+./research-contract MarketTapeDataset.openInterest :: (symbol: string) => MinuteColumn<OpenInterestSnapshot> | undefined
+./research-contract MarketTapeDataset.symbols :: () => readonly string[]
+./research-contract MarketTapeDataset.taker :: (symbol: string) => MinuteColumn<TakerSnapshot> | undefined
+./research-contract MarketTapeDataset.timeframe :: string
+./research-contract MarketTapeDataset.toTape :: () => MarketTape
+./research-contract MinuteColumn.at :: (minuteTs: number) => T | undefined
+./research-contract MinuteColumn.covered :: (minuteTs: number) => boolean
+./research-contract ModuleManifest.author :: Author
+./research-contract ModuleManifest.capabilities :: CapabilityDeclaration
+./research-contract ModuleManifest.contractVersion :: string
+./research-contract ModuleManifest.dataNeeds :: DataNeedsDeclaration
+./research-contract ModuleManifest.hooks :: readonly LifecycleHook[]
+./research-contract ModuleManifest.id :: string
+./research-contract ModuleManifest.interceptionPoint? :: string | undefined
+./research-contract ModuleManifest.kind :: ModuleKind
+./research-contract ModuleManifest.lifecycle? :: StrategyLifecycle | undefined
+./research-contract ModuleManifest.marketData? :: readonly MarketDataRequirement[] | undefined
+./research-contract ModuleManifest.name :: string
+./research-contract ModuleManifest.params? :: object | undefined
+./research-contract ModuleManifest.paramsSchema :: object
+./research-contract ModuleManifest.rationale :: string
+./research-contract ModuleManifest.source? :: string | undefined
+./research-contract ModuleManifest.status :: ModuleStatus
+./research-contract ModuleManifest.summary :: string
+./research-contract ModuleManifest.targetStrategyRef? :: string | undefined
+./research-contract ModuleManifest.version :: string
+./research-contract ModuleManifest.warmup? :: ActorWarmupSource | undefined
+./research-contract NextBarOpenFillModel.kind :: "next_bar_open"
+./research-contract NoPartialFillModel.kind :: "none"
+./research-contract ObservedValue.effectiveTsUs :: TimestampUs
+./research-contract ObservedValue.finality :: "provisional" | "final"
+./research-contract ObservedValue.revision :: number
+./research-contract ObservedValue.value :: T
+./research-contract OiPoint.oiTotalUsd :: number
+./research-contract OiPoint.ts :: number
+./research-contract OiSnapshotEvent.kind :: "oi_snapshot"
+./research-contract OiSnapshotEvent.oi :: OpenInterestSnapshot
+./research-contract OiSnapshotEvent.symbol :: string
+./research-contract OiSnapshotEvent.ts :: number
+./research-contract OpenInterestSnapshot.oiTotalUsd :: number
+./research-contract OpenInterestSnapshot.ts :: number
+./research-contract OpenInterestValue.oiTotalUsd :: number
+./research-contract OpenLimitOrderView.clientOrderId :: string
+./research-contract OpenLimitOrderView.createdTs :: TimestampUs
+./research-contract OpenLimitOrderView.estimatedQty? :: number | undefined
+./research-contract OpenLimitOrderView.filledQty? :: number | undefined
+./research-contract OpenLimitOrderView.filledQtyUsd :: number
+./research-contract OpenLimitOrderView.price :: number
+./research-contract OpenLimitOrderView.qtyUsd :: number
+./research-contract OpenLimitOrderView.reduceOnly? :: boolean | undefined
+./research-contract OpenLimitOrderView.side :: OrderSide
+./research-contract OpenLimitOrderView.status :: OpenOrderStatus
+./research-contract OpenLimitOrderView.tif? :: TimeInForce | undefined
+./research-contract OpenLimitOrderView.type :: "limit"
+./research-contract OpenMarketOrderView.clientOrderId :: string
+./research-contract OpenMarketOrderView.createdTs :: TimestampUs
+./research-contract OpenMarketOrderView.estimatedQty? :: number | undefined
+./research-contract OpenMarketOrderView.filledQty? :: number | undefined
+./research-contract OpenMarketOrderView.filledQtyUsd :: number
+./research-contract OpenMarketOrderView.qtyUsd :: number
+./research-contract OpenMarketOrderView.reduceOnly? :: boolean | undefined
+./research-contract OpenMarketOrderView.side :: OrderSide
+./research-contract OpenMarketOrderView.status :: OpenOrderStatus
+./research-contract OpenMarketOrderView.tif? :: TimeInForce | undefined
+./research-contract OpenMarketOrderView.type :: "market"
+./research-contract OpenStopMarketOrderView.clientOrderId :: string
+./research-contract OpenStopMarketOrderView.createdTs :: TimestampUs
+./research-contract OpenStopMarketOrderView.estimatedQty? :: number | undefined
+./research-contract OpenStopMarketOrderView.filledQty? :: number | undefined
+./research-contract OpenStopMarketOrderView.filledQtyUsd :: number
+./research-contract OpenStopMarketOrderView.qtyUsd :: number
+./research-contract OpenStopMarketOrderView.reduceOnly? :: boolean | undefined
+./research-contract OpenStopMarketOrderView.side :: OrderSide
+./research-contract OpenStopMarketOrderView.status :: OpenOrderStatus
+./research-contract OpenStopMarketOrderView.stopPrice :: number
+./research-contract OpenStopMarketOrderView.tif? :: TimeInForce | undefined
+./research-contract OpenStopMarketOrderView.type :: "stop_market"
+./research-contract OverlayAnnotateDecision.kind :: "annotate"
+./research-contract OverlayAnnotateDecision.notes? :: string | undefined
+./research-contract OverlayAnnotateDecision.tags? :: readonly string[] | undefined
+./research-contract OverlayPassDecision.kind :: "pass"
+./research-contract OverlayPatchDecision.kind :: "patch"
+./research-contract OverlayPatchDecision.patch :: object
+./research-contract OverlayVetoDecision.kind :: "veto"
+./research-contract OverlayVetoDecision.rationale? :: string | undefined
+./research-contract OverlayVetoDecision.reasonCode :: string
+./research-contract ParamSpec.default? :: number | undefined
+./research-contract ParamSpec.exclusiveMin? :: number | undefined
+./research-contract ParamSpec.min? :: number | undefined
+./research-contract ParamSpec.type :: "number" | "int"
+./research-contract PerMinuteProrateFundingModel.intervalHours :: number
+./research-contract PerMinuteProrateFundingModel.kind :: "per_minute_prorate"
+./research-contract PointInTimeDataApi.closedCandles :: (lookback: number) => readonly Readonly<Bar>[]
+./research-contract PointInTimeDataApi.indicatorAsOf :: (name: string) => number | undefined
+./research-contract PointInTimeMarketApi.fundingAsOf? :: (() => FundingReading) | undefined
+./research-contract PointInTimeMarketApi.fundingWindow? :: ((lookback: number) => readonly (FundingPoint | undefined)[]) | undefined
+./research-contract PointInTimeMarketApi.liqAsOf :: () => LiqPoint | undefined
+./research-contract PointInTimeMarketApi.liqWindow :: (lookback: number) => readonly (LiqPoint | undefined)[]
+./research-contract PointInTimeMarketApi.oiAsOf :: () => OiPoint | undefined
+./research-contract PointInTimeMarketApi.oiWindow :: (lookback: number) => readonly (OiPoint | undefined)[]
+./research-contract PointInTimeMarketApi.takerAsOf? :: (() => TakerReading) | undefined
+./research-contract PointInTimeMarketApi.takerWindow? :: ((lookback: number) => readonly (TakerPoint | undefined)[]) | undefined
+./research-contract PortfolioSnapshot.equity :: number
+./research-contract PortfolioSnapshot.openPositions :: number
+./research-contract PositionSnapshot.entryPrice :: number
+./research-contract PositionSnapshot.side :: "long" | "short"
+./research-contract PositionSnapshot.size :: number
+./research-contract PositionSnapshot.stop? :: number | undefined
+./research-contract PositionSnapshot.take? :: number | undefined
+./research-contract PromotionRequest.evidenceRef? :: string | undefined
+./research-contract PromotionRequest.fromStatus :: ModuleStatus
+./research-contract PromotionRequest.moduleRef :: Ref
+./research-contract PromotionRequest.reviewDecision? :: ReviewDecision | undefined
+./research-contract PromotionRequest.toStatus :: ModuleStatus
+./research-contract RawMarketTapeSource.datasetRef :: string
+./research-contract RawMarketTapeSource.kind :: "market_tape"
+./research-contract RawMarketTapeSource.symbols :: Readonly<Record<string, RawMarketTapeSymbolColumns>>
+./research-contract RawMarketTapeSource.timeframe :: string
+./research-contract RawMarketTapeSymbolColumns.bars :: readonly Bar[]
+./research-contract RawMarketTapeSymbolColumns.funding? :: readonly FundingSnapshot[] | undefined
+./research-contract RawMarketTapeSymbolColumns.liq? :: readonly LiquidationSnapshot[] | undefined
+./research-contract RawMarketTapeSymbolColumns.oi? :: readonly OpenInterestSnapshot[] | undefined
+./research-contract RawMarketTapeSymbolColumns.taker? :: readonly TakerSnapshot[] | undefined
+./research-contract RealityModel.feeModel :: FixedBpsFeeModel
+./research-contract RealityModel.fillModel :: FillModel
+./research-contract RealityModel.fundingModel? :: PerMinuteProrateFundingModel | undefined
+./research-contract RealityModel.id :: string
+./research-contract RealityModel.latency? :: ZeroLatencyModel | undefined
+./research-contract RealityModel.partialFill? :: NoPartialFillModel | undefined
+./research-contract RealityModel.slippageModel :: FixedBpsSlippageModel
+./research-contract RealityModel.version :: string
+./research-contract RealityModelSlots.feeModel :: FixedBpsFeeModel
+./research-contract RealityModelSlots.fillModel :: FillModel
+./research-contract RealityModelSlots.fundingModel? :: PerMinuteProrateFundingModel | undefined
+./research-contract RealityModelSlots.latency? :: ZeroLatencyModel | undefined
+./research-contract RealityModelSlots.partialFill? :: NoPartialFillModel | undefined
+./research-contract RealityModelSlots.slippageModel :: FixedBpsSlippageModel
+./research-contract Ref.id :: string
+./research-contract Ref.version :: string
+./research-contract ReviewDecision.decision :: ReviewDecisionOutcome
+./research-contract ReviewDecision.notes? :: string | undefined
+./research-contract ReviewDecision.reviewer? :: string | undefined
+./research-contract RevisionTransitionOptions.skipPolicy? :: DeclaredRevisionSkipPolicy | undefined
+./research-contract RevisionTransitionOptions.valueEquals? :: ((a: T, b: T) => boolean) | undefined
+./research-contract RiskProfile.allowedSides :: readonly ("long" | "short")[]
+./research-contract RiskProfile.dcaLimits? :: object | undefined
+./research-contract RiskProfile.exposureLimits :: object
+./research-contract RiskProfile.id :: string
+./research-contract RiskProfile.maxConcurrentPositions :: number
+./research-contract RiskProfile.scaleInLimits? :: object | undefined
+./research-contract RiskProfile.stopBounds? :: Bounds | undefined
+./research-contract RiskProfile.takeBounds? :: Bounds | undefined
+./research-contract RiskProfile.validatorRefs? :: readonly string[] | undefined
+./research-contract RiskProfile.version :: string
+./research-contract RunInfo.mode :: string
+./research-contract RunInfo.runId :: string
+./research-contract RunInfo.seed :: number
+./research-contract RunPeriod.from :: string
+./research-contract RunPeriod.to :: string
+./research-contract SameBarCloseFillModel.kind :: "same_bar_close"
+./research-contract ScheduledRecord.event :: E
+./research-contract ScheduledRecord.eventTsUs :: TimestampUs
+./research-contract ScheduledRecord.observedTsUs :: TimestampUs
+./research-contract ScheduledRecord.seq :: number
+./research-contract ScheduledRecord.subscriptionId :: string
+./research-contract StochasticValue.d :: number
+./research-contract StochasticValue.k :: number
+./research-contract StrategyContext.bar :: Readonly<Bar>
+./research-contract StrategyContext.clock :: { now(): number; }
+./research-contract StrategyContext.data :: PointInTimeDataApi
+./research-contract StrategyContext.indicators :: IndicatorApi
+./research-contract StrategyContext.market? :: PointInTimeMarketApi | undefined
+./research-contract StrategyContext.params :: Readonly<Record<string, unknown>>
+./research-contract StrategyContext.pendingIntent :: Readonly<IntentSnapshot> | null
+./research-contract StrategyContext.portfolio :: Readonly<PortfolioSnapshot>
+./research-contract StrategyContext.position :: Readonly<PositionSnapshot> | null
+./research-contract StrategyContext.rng :: { next(): number; }
+./research-contract StrategyContext.run :: RunInfo
+./research-contract StrategyContext.symbol :: string
+./research-contract StrategyModule.dispose? :: ((ctx: StrategyContext) => void) | undefined
+./research-contract StrategyModule.init? :: ((ctx: StrategyContext) => void) | undefined
+./research-contract StrategyModule.manifest :: ModuleManifest
+./research-contract StrategyModule.onBarClose :: StrategyHook
+./research-contract StrategyModule.onPendingIntentBar? :: StrategyHook | undefined
+./research-contract StrategyModule.onPositionBar? :: StrategyHook | undefined
+./research-contract TakerPoint.buyUsd :: number
+./research-contract TakerPoint.sellUsd :: number
+./research-contract TakerPoint.ts :: number
+./research-contract TakerSnapshot.buyUsd :: number
+./research-contract TakerSnapshot.sellUsd :: number
+./research-contract TakerSnapshot.ts :: number
+./research-contract TakerSnapshotEvent.kind :: "taker_snapshot"
+./research-contract TakerSnapshotEvent.symbol :: string
+./research-contract TakerSnapshotEvent.taker :: TakerSnapshot
+./research-contract TakerSnapshotEvent.ts :: number
+./research-contract TakerVolumeValue.buyUsd :: number
+./research-contract TakerVolumeValue.sellUsd :: number
+./research-contract UpdateProtectionDecision.kind :: "update_protection"
+./research-contract UpdateProtectionDecision.stop? :: number | undefined
+./research-contract UpdateProtectionDecision.take? :: number | undefined
+./research-contract ValidationIssue.code :: ValidationCode
+./research-contract ValidationIssue.message :: string
+./research-contract ValidationIssue.path :: string
+./research-contract ValidationIssue.severity :: Severity
+./research-contract ValidationResult.issues :: readonly ValidationIssue[]
+./research-contract ValidationResult.normalized? :: object | undefined
+./research-contract ValidationResult.status :: ValidationStatus
+./research-contract VenueRef.symbol? :: undefined
+./research-contract VenueRef.venue :: string
+./research-contract ZeroLatencyModel.kind :: "zero"
+./research-contract const ACTOR_COMMAND_KINDS :: readonly ["place", "cancel", "timer.set", "timer.cancel", "annotate"]
+./research-contract const ACTOR_INPUT_EVENT_KINDS :: readonly ["market.candle.closed", "market.open_interest.observed", "market.liquidations.bucket_closed", "market.taker_volume.bucket_closed", "market.funding.observed", "market.subscription.status_changed", "order.accepted", "order.denied", "order.rejected", "order.canceled", "cancel.rejected", "order.expired", "fill", "timer.fired", "trading_state.changed"]
+./research-contract const CANONICAL_EVENT_ORDER :: readonly MarketTapeEventKind[]
+./research-contract const CONTRACT_VERSION :: "017.6"
+./research-contract const DEFAULT_STRATEGY_LIFECYCLE :: StrategyLifecycle
+./research-contract const EVENT_DRIVEN_HOOKS :: readonly ["init", "onEvent", "dispose"]
+./research-contract const EVENT_DRIVEN_MIN_CONTRACT_VERSION :: "017.5"
+./research-contract const FEE_MODEL_KINDS :: readonly ["fixed_bps"]
+./research-contract const FILL_MODEL_KINDS :: readonly ["next_bar_open", "same_bar_close"]
+./research-contract const FORBIDDEN_CAPABILITIES :: readonly ["exchangeDirect", "brokerDirect", "filesystem", "network", "process", "env", "dynamicEval"]
+./research-contract const FUNDING_MODEL_KINDS :: readonly ["per_minute_prorate"]
+./research-contract const HOST_SOURCE_DESCRIPTOR :: ActorHostSourceDescriptor
+./research-contract const HOST_SUBSCRIPTION_ID :: string
+./research-contract const LATENCY_MODEL_KINDS :: readonly ["zero"]
+./research-contract const LIFECYCLE_FIELD_MIN_CONTRACT_VERSION :: "017.3"
+./research-contract const MARKET_TAPE_EVENT_KINDS :: readonly MarketTapeEventKind[]
+./research-contract const MAX_PLAIN_DATA_DEPTH :: 500
+./research-contract const MAX_TIMESTAMP_US :: TimestampUs
+./research-contract const METRIC_CATALOG :: readonly ["pnl", "sharpe", "max_drawdown", "win_rate", "total_trades", "profit_factor", "top_trade_contribution_pct"]
+./research-contract const MICROS_PER_MILLI :: 1000
+./research-contract const MICROS_PER_MINUTE :: 60000000
+./research-contract const MICROS_PER_SECOND :: 1000000
+./research-contract const PARTIAL_FILL_MODEL_KINDS :: readonly ["none"]
+./research-contract const POSITION_QTY_RELATIVE_EPSILON :: 1e-12
+./research-contract const REALITY_MODEL_KIND_CATALOG :: Readonly<Record<"fillModel" | "feeModel" | "slippageModel" | "fundingModel" | "latency" | "partialFill", readonly string[]>>
+./research-contract const REALITY_MODEL_SLOTS :: readonly ["fillModel", "feeModel", "slippageModel", "fundingModel", "latency", "partialFill"]
+./research-contract const ROBUSTNESS_CATALOG :: readonly ["walk_forward", "oos_split"]
+./research-contract const SINGLE_POSITION_ONLY_HOOKS :: readonly ["onBarClose", "onPositionBar", "onPendingIntentBar"]
+./research-contract const SLIPPAGE_MODEL_KINDS :: readonly ["fixed_bps"]
+./research-contract const STRATEGY_LIFECYCLES :: readonly ["single_position", "event_driven"]
+./research-contract const SUPPORTED_CONTRACT_VERSIONS :: readonly ["017.1", "017.2", "017.3", "017.4", "017.5", "017.6"]
+./research-contract const SUPPORTED_MARKET_DATA_KINDS :: readonly ["openInterest", "liquidations", "funding", "taker"]
+./research-contract const SYMBOL_FROM_MIN_CONTRACT_VERSION :: "017.6"
+./research-contract const TRADING_STATES :: readonly ["normal", "reducing", "halted"]
+./research-contract function addUs :: (ts: TimestampUs, delta: DurationUs) => TimestampUs
+./research-contract function assertSafeUs :: (value: number, what: string) => number
+./research-contract function checkRevisionTransition :: <T>(previous: { readonly state: "observed"; readonly value: T; readonly effectiveTsUs: TimestampUs; readonly finality: "provisional" | "final"; readonly revision: number; } | undefined, next: { readonly state: "observed"; readonly value: T; readonly effectiveTsUs: TimestampUs; readonly finality: "provisional" | "final"; readonly revision: number; }, options?: RevisionTransitionOptions<T> | undefined) => RevisionTransitionVerdict
+./research-contract function compareMarketTapeEvents :: (a: MarketTapeEvent, b: MarketTapeEvent) => number
+./research-contract function defineActor :: <S extends ActorStateValue = ActorStateValue>(handlers: ActorHandlers<S>) => StrategyActor<S>
+./research-contract function derivePositionView :: (ledger: ExecutionLedger) => PositionView | undefined
+./research-contract function diffUs :: (a: TimestampUs, b: TimestampUs) => DurationUs
+./research-contract function durationUs :: (value: number) => DurationUs
+./research-contract function findDuplicateSubscriptionIds :: (subscriptions: readonly ActorSubscriptionDescriptor[]) => readonly string[]
+./research-contract function hasOnlyPlainArrayKeys :: (arr: readonly unknown[]) => boolean
+./research-contract function hasOnlyPlainOwnKeys :: (obj: object) => boolean
+./research-contract function isDurationUs :: (value: unknown) => value is DurationUs
+./research-contract function isExecutionLedger :: (value: unknown) => value is ExecutionLedger
+./research-contract function isExecutionLedgerEntry :: (value: unknown) => value is ExecutionLedgerEntry
+./research-contract function isHostSourceDescriptor :: (descriptor: ActorSubscriptionDescriptor) => descriptor is ActorHostSourceDescriptor
+./research-contract function isHostSubscriptionId :: (subscriptionId: string) => boolean
+./research-contract function isPlainActorState :: (value: unknown) => value is ActorStateValue
+./research-contract function isPlainObjectPrototype :: (obj: object) => boolean
+./research-contract function isTimestampUs :: (value: unknown) => value is TimestampUs
+./research-contract function parseArchiveRow :: <T>(hasKind: boolean, value: T | null | undefined) => ArchiveRowVerdict<T>
+./research-contract function platformContractContext :: (knownStrategyRefs?: readonly string[] | undefined) => ContractContext
+./research-contract function resolveRealityModel :: (input: RealityModelReadInput) => RealityModelResolution
+./research-contract function safeStringify :: (value: unknown) => string
+./research-contract function timestampUs :: (value: number) => TimestampUs
+./research-contract function timestampUsFromMillis :: (ms: number) => TimestampUs
+./research-contract function timestampUsToMillis :: (ts: TimestampUs) => number
+./research-contract interface ActorAnnotateCommand :: ActorAnnotateCommand
+./research-contract interface ActorBudgets :: ActorBudgets
+./research-contract interface ActorCancelCommand :: ActorCancelCommand
+./research-contract interface ActorContext :: ActorContext
+./research-contract interface ActorCumulativeFrontierBudget :: ActorCumulativeFrontierBudget
+./research-contract interface ActorDispatchBudget :: ActorDispatchBudget
+./research-contract interface ActorEnvelope :: ActorEnvelope<E>
+./research-contract interface ActorFillEvent :: ActorFillEvent
+./research-contract interface ActorHostSourceDescriptor :: ActorHostSourceDescriptor
+./research-contract interface ActorInit :: ActorInit<S>
+./research-contract interface ActorMarketSourceDescriptor :: ActorMarketSourceDescriptor
+./research-contract interface ActorOrderAcceptedEvent :: ActorOrderAcceptedEvent
+./research-contract interface ActorOrderCancelRejectedEvent :: ActorOrderCancelRejectedEvent
+./research-contract interface ActorOrderCanceledEvent :: ActorOrderCanceledEvent
+./research-contract interface ActorOrderDeniedEvent :: ActorOrderDeniedEvent
+./research-contract interface ActorOrderExpiredEvent :: ActorOrderExpiredEvent
+./research-contract interface ActorOrderRejectedEvent :: ActorOrderRejectedEvent
+./research-contract interface ActorPlaceLimitCommand :: ActorPlaceLimitCommand
+./research-contract interface ActorPlaceMarketCommand :: ActorPlaceMarketCommand
+./research-contract interface ActorPlaceStopMarketCommand :: ActorPlaceStopMarketCommand
+./research-contract interface ActorRng :: ActorRng
+./research-contract interface ActorTimerCancelCommand :: ActorTimerCancelCommand
+./research-contract interface ActorTimerFiredEvent :: ActorTimerFiredEvent
+./research-contract interface ActorTimerSetAfterCommand :: ActorTimerSetAfterCommand
+./research-contract interface ActorTimerSetAtCommand :: ActorTimerSetAtCommand
+./research-contract interface ActorTradingStateChangedEvent :: ActorTradingStateChangedEvent
+./research-contract interface AddToPositionDecision :: AddToPositionDecision
+./research-contract interface AnnotateDecision :: AnnotateDecision
+./research-contract interface BacktestRunRequest :: BacktestRunRequest
+./research-contract interface BacktestRunResult :: BacktestRunResult
+./research-contract interface Bar :: Bar
+./research-contract interface BarCloseEvent :: BarCloseEvent
+./research-contract interface BollingerValue :: BollingerValue
+./research-contract interface BoundRealityModelReadInput :: BoundRealityModelReadInput
+./research-contract interface Bounds :: Bounds
+./research-contract interface CandleValue :: CandleValue
+./research-contract interface CapabilityDeclaration :: CapabilityDeclaration
+./research-contract interface ContractContext :: ContractContext
+./research-contract interface CoverageModel :: CoverageModel
+./research-contract interface DataNeedsDeclaration :: DataNeedsDeclaration
+./research-contract interface DeclaredDatasetSplice :: DeclaredDatasetSplice
+./research-contract interface DeclaredRevisionSkipPolicy :: DeclaredRevisionSkipPolicy
+./research-contract interface EmbeddedRealityModelReadInput :: EmbeddedRealityModelReadInput
+./research-contract interface EnterDecision :: EnterDecision
+./research-contract interface EventDrivenModule :: EventDrivenModule<S>
+./research-contract interface ExecutionLedgerFillEntry :: ExecutionLedgerFillEntry
+./research-contract interface ExecutionLedgerFundingSettlementEntry :: ExecutionLedgerFundingSettlementEntry
+./research-contract interface ExecutionProfile :: ExecutionProfile
+./research-contract interface ExitDecision :: ExitDecision
+./research-contract interface FixedBpsFeeModel :: FixedBpsFeeModel
+./research-contract interface FixedBpsSlippageModel :: FixedBpsSlippageModel
+./research-contract interface FundingPoint :: FundingPoint
+./research-contract interface FundingSnapshot :: FundingSnapshot
+./research-contract interface FundingSnapshotEvent :: FundingSnapshotEvent
+./research-contract interface FundingValue :: FundingValue
+./research-contract interface HypothesisBrief :: HypothesisBrief
+./research-contract interface HypothesisOverlayModule :: HypothesisOverlayModule
+./research-contract interface IdleDecision :: IdleDecision
+./research-contract interface IndicatorApi :: IndicatorApi
+./research-contract interface IndicatorDefinition :: IndicatorDefinition
+./research-contract interface IndicatorIssue :: IndicatorIssue
+./research-contract interface IndicatorRequest :: IndicatorRequest
+./research-contract interface IndicatorValidationResult :: IndicatorValidationResult
+./research-contract interface InstrumentRef :: InstrumentRef
+./research-contract interface IntentSnapshot :: IntentSnapshot
+./research-contract interface KindCoverage :: KindCoverage
+./research-contract interface LiqPoint :: LiqPoint
+./research-contract interface LiqSnapshotEvent :: LiqSnapshotEvent
+./research-contract interface LiquidationSnapshot :: LiquidationSnapshot
+./research-contract interface LiquidationsValue :: LiquidationsValue
+./research-contract interface MacdValue :: MacdValue
+./research-contract interface MarketCandleClosedEvent :: MarketCandleClosedEvent
+./research-contract interface MarketDataGap :: MarketDataGap
+./research-contract interface MarketFundingObservedEvent :: MarketFundingObservedEvent
+./research-contract interface MarketLiquidationsBucketClosedEvent :: MarketLiquidationsBucketClosedEvent
+./research-contract interface MarketOpenInterestObservedEvent :: MarketOpenInterestObservedEvent
+./research-contract interface MarketSubscriptionStatusChangedEvent :: MarketSubscriptionStatusChangedEvent
+./research-contract interface MarketTakerVolumeBucketClosedEvent :: MarketTakerVolumeBucketClosedEvent
+./research-contract interface MarketTape :: MarketTape
+./research-contract interface MarketTapeDataset :: MarketTapeDataset
+./research-contract interface MinuteColumn :: MinuteColumn<T>
+./research-contract interface ModuleManifest :: ModuleManifest
+./research-contract interface NextBarOpenFillModel :: NextBarOpenFillModel
+./research-contract interface NoPartialFillModel :: NoPartialFillModel
+./research-contract interface ObservedValue :: ObservedValue<T>
+./research-contract interface OiPoint :: OiPoint
+./research-contract interface OiSnapshotEvent :: OiSnapshotEvent
+./research-contract interface OpenInterestSnapshot :: OpenInterestSnapshot
+./research-contract interface OpenInterestValue :: OpenInterestValue
+./research-contract interface OpenLimitOrderView :: OpenLimitOrderView
+./research-contract interface OpenMarketOrderView :: OpenMarketOrderView
+./research-contract interface OpenStopMarketOrderView :: OpenStopMarketOrderView
+./research-contract interface OverlayAnnotateDecision :: OverlayAnnotateDecision
+./research-contract interface OverlayPassDecision :: OverlayPassDecision
+./research-contract interface OverlayPatchDecision :: OverlayPatchDecision
+./research-contract interface OverlayVetoDecision :: OverlayVetoDecision
+./research-contract interface ParamSpec :: ParamSpec
+./research-contract interface PerMinuteProrateFundingModel :: PerMinuteProrateFundingModel
+./research-contract interface PointInTimeDataApi :: PointInTimeDataApi
+./research-contract interface PointInTimeMarketApi :: PointInTimeMarketApi
+./research-contract interface PortfolioSnapshot :: PortfolioSnapshot
+./research-contract interface PositionSnapshot :: PositionSnapshot
+./research-contract interface PromotionRequest :: PromotionRequest
+./research-contract interface RawMarketTapeSource :: RawMarketTapeSource
+./research-contract interface RawMarketTapeSymbolColumns :: RawMarketTapeSymbolColumns
+./research-contract interface RealityModel :: RealityModel
+./research-contract interface RealityModelSlots :: RealityModelSlots
+./research-contract interface Ref :: Ref
+./research-contract interface ReviewDecision :: ReviewDecision
+./research-contract interface RevisionTransitionOptions :: RevisionTransitionOptions<T>
+./research-contract interface RiskProfile :: RiskProfile
+./research-contract interface RunInfo :: RunInfo
+./research-contract interface RunPeriod :: RunPeriod
+./research-contract interface SameBarCloseFillModel :: SameBarCloseFillModel
+./research-contract interface ScheduledRecord :: ScheduledRecord<E>
+./research-contract interface StochasticValue :: StochasticValue
+./research-contract interface StrategyContext :: StrategyContext
+./research-contract interface StrategyModule :: StrategyModule
+./research-contract interface TakerPoint :: TakerPoint
+./research-contract interface TakerSnapshot :: TakerSnapshot
+./research-contract interface TakerSnapshotEvent :: TakerSnapshotEvent
+./research-contract interface TakerVolumeValue :: TakerVolumeValue
+./research-contract interface UpdateProtectionDecision :: UpdateProtectionDecision
+./research-contract interface ValidationIssue :: ValidationIssue
+./research-contract interface ValidationResult :: ValidationResult
+./research-contract interface VenueRef :: VenueRef
+./research-contract interface ZeroLatencyModel :: ZeroLatencyModel
+./research-contract symbol MARKET_DATA_KINDS :: readonly ["candles", "open_interest", "liquidations", "taker_volume", "funding"]
+./research-contract symbol MARKET_KIND_RANK :: Readonly<Record<"candles" | "open_interest" | "liquidations" | "taker_volume" | "funding", number>>
+./research-contract symbol MarketDataKind :: any
+./research-contract type ActorCommand :: ActorCommand
+./research-contract type ActorCommandBatch :: ActorCommandBatch
+./research-contract type ActorCommandKind :: "place" | "cancel" | "timer.set" | "timer.cancel" | "annotate"
+./research-contract type ActorHandlerResult :: ActorHandlerResult
+./research-contract type ActorHandlers :: ActorHandlers<S>
+./research-contract type ActorInputEvent :: ActorInputEvent
+./research-contract type ActorInputEventKind :: "market.candle.closed" | "market.open_interest.observed" | "market.liquidations.bucket_closed" | "market.taker_volume.bucket_closed" | "market.funding.observed" | "market.subscription.status_changed" | "order.accepted" | "order.denied" | "order.rejected" | "order.canceled" | "cancel.rejected" | "order.expired" | "fill" | "timer.fired" | "trading_state.changed"
+./research-contract type ActorPlaceCommand :: ActorPlaceCommand
+./research-contract type ActorReadiness :: ActorReadiness
+./research-contract type ActorStateValue :: ActorStateValue
+./research-contract type ActorSubscriptionDescriptor :: ActorSubscriptionDescriptor
+./research-contract type ActorTimerSetCommand :: ActorTimerSetCommand
+./research-contract type ActorWarmupSource :: ActorWarmupSource
+./research-contract type ArchiveRowVerdict :: ArchiveRowVerdict<T>
+./research-contract type Author :: Author
+./research-contract type CandlesMarketDataRequirement :: CandlesMarketDataRequirement
+./research-contract type DurationUs :: DurationUs
+./research-contract type ExecutionLedger :: ExecutionLedger
+./research-contract type ExecutionLedgerEntry :: ExecutionLedgerEntry
+./research-contract type FeeModel :: FixedBpsFeeModel
+./research-contract type FeeModelKind :: "fixed_bps"
+./research-contract type FillModel :: FillModel
+./research-contract type FillModelKind :: "next_bar_open" | "same_bar_close"
+./research-contract type FundingMarketDataRequirement :: FundingMarketDataRequirement
+./research-contract type FundingModel :: PerMinuteProrateFundingModel
+./research-contract type FundingModelKind :: "per_minute_prorate"
+./research-contract type FundingReading :: FundingReading
+./research-contract type HistoricalMarketTape :: MarketTape
+./research-contract type IndicatorCatalog :: IndicatorCatalog
+./research-contract type IndicatorValidationCode :: IndicatorValidationCode
+./research-contract type IndicatorValue :: IndicatorValue
+./research-contract type LatencyModel :: ZeroLatencyModel
+./research-contract type LatencyModelKind :: "zero"
+./research-contract type LegacyMarketDataKind :: LegacyMarketDataKind
+./research-contract type LifecycleHook :: LifecycleHook
+./research-contract type LiquidationsMarketDataRequirement :: LiquidationsMarketDataRequirement
+./research-contract type MarketDataCoverageState :: MarketDataCoverageState
+./research-contract type MarketDataRequirement :: MarketDataRequirement
+./research-contract type MarketDataScope :: MarketDataScope
+./research-contract type MarketDataUnit :: MarketDataUnit
+./research-contract type MarketTapeEvent :: MarketTapeEvent
+./research-contract type MarketTapeEventKind :: MarketTapeEventKind
+./research-contract type MetricCatalog :: MetricCatalog
+./research-contract type ModuleKind :: ModuleKind
+./research-contract type ModuleStatus :: ModuleStatus
+./research-contract type ObservationStatus :: ObservationStatus<T>
+./research-contract type ObservedRevision :: { readonly state: "observed"; readonly value: T; readonly effectiveTsUs: TimestampUs; readonly finality: "provisional" | "final"; readonly revision: number; }
+./research-contract type OpenInterestMarketDataRequirement :: OpenInterestMarketDataRequirement
+./research-contract type OpenOrderStatus :: OpenOrderStatus
+./research-contract type OpenOrderView :: OpenOrderView
+./research-contract type OrderSide :: OrderSide
+./research-contract type OrderType :: OrderType
+./research-contract type OutputShape :: OutputShape
+./research-contract type OverlayDecision :: OverlayDecision
+./research-contract type PartialFillModel :: NoPartialFillModel
+./research-contract type PartialFillModelKind :: "none"
+./research-contract type PointInTimeContext :: StrategyContext
+./research-contract type PositionView :: PositionView
+./research-contract type RealityModelReadInput :: RealityModelReadInput
+./research-contract type RealityModelResolution :: RealityModelResolution
+./research-contract type RealityModelResolutionFailure :: RealityModelResolutionFailure
+./research-contract type RealityModelSlotName :: "fillModel" | "feeModel" | "slippageModel" | "fundingModel" | "latency" | "partialFill"
+./research-contract type RealityModelSource :: RealityModelSource
+./research-contract type ReviewDecisionOutcome :: ReviewDecisionOutcome
+./research-contract type RevisionPolicy :: RevisionPolicy
+./research-contract type RevisionTransitionVerdict :: RevisionTransitionVerdict
+./research-contract type Seq :: number
+./research-contract type Severity :: Severity
+./research-contract type SlippageModel :: FixedBpsSlippageModel
+./research-contract type SlippageModelKind :: "fixed_bps"
+./research-contract type SourceField :: SourceField
+./research-contract type StrategyActor :: StrategyActor<S>
+./research-contract type StrategyDecision :: StrategyDecision
+./research-contract type StrategyHook :: StrategyHook
+./research-contract type StrategyLifecycle :: StrategyLifecycle
+./research-contract type SubscriptionId :: string
+./research-contract type TakerReading :: TakerReading
+./research-contract type TakerVolumeMarketDataRequirement :: TakerVolumeMarketDataRequirement
+./research-contract type TapeBuildResult :: TapeBuildResult
+./research-contract type TimeInForce :: TimeInForce
+./research-contract type TimestampUs :: TimestampUs
+./research-contract type TradingState :: TradingState
+./research-contract type ValidationCode :: ValidationCode
+./research-contract type ValidationStatus :: ValidationStatus
+./validation function validate :: (input: ValidationInput, contractContext: ContractContext) => ValidationResult
+./validation symbol ALL_VALIDATION_CODES :: ValidationCode[]
+./validation symbol CODE_SEVERITY :: Readonly<Record<ValidationCode, Severity>>
+./validation symbol CoreSchemaName :: any
+./validation symbol ModuleInput :: any
+./validation symbol PromotionInput :: any
+./validation symbol RealityModelInput :: any
+./validation symbol RunRequestInput :: any
+./validation symbol SCHEMA_FILES :: Readonly<Record<CoreSchemaName, string>>
+./validation symbol SCHEMA_IDS :: Readonly<Record<CoreSchemaName, string>>
+./validation symbol allSchemaAssets :: () => readonly Record<string, unknown>[]
+./validation symbol schemaAsset :: (name: CoreSchemaName) => Record<string, unknown>
+./validation type ValidationInput :: ValidationInput

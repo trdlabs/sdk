@@ -86,6 +86,30 @@ test('every gate runs before publish', () => {
 // directly, and that ask must happen strictly between publish and the git tag/release
 // note: the tag promises a provenance-backed release and must not exist if the registry
 // cannot confirm one.
+// Ярус 2 публичной поверхности (Волна 3, ADR-0029): сверка с реестровым latest
+// обязана стоять ДО publish — опубликованная версия неизменяема, починка после
+// неё возможна только вперёд. pr-check при этом по-прежнему не умеет публиковать.
+test('the surface gate runs before publish and pr-check still cannot publish', () => {
+  const gate = stepAt('npx tsx scripts/assert-surface-compatible.ts "@trdlabs/sdk" "$VERSION"');
+  const publishAt = stepAt('npm publish --access public --provenance');
+  assert.ok(gate >= 0, 'sdk-release.yml must run the public-surface gate');
+  assert.ok(publishAt >= 0, 'sdk-release.yml must still publish');
+  assert.ok(
+    gate < publishAt,
+    'the surface gate must run BEFORE publish: a published version is immutable and can only be fixed forward',
+  );
+
+  // Матч по конфигурации, не по прозе: заголовочный комментарий pr-check.yml сам
+  // упоминает «id-token: write» как то, чего у него НЕТ, — строки-комментарии
+  // отбрасываются, иначе документация запрета читалась бы как его нарушение.
+  const prCheck = readFileSync(new URL('../.github/workflows/pr-check.yml', import.meta.url), 'utf8')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n');
+  assert.doesNotMatch(prCheck, /npm publish/, 'pr-check must never publish');
+  assert.doesNotMatch(prCheck, /id-token/, 'pr-check must not request provenance OIDC');
+});
+
 test('provenance attestation gate runs after publish and before the git tag/release step', () => {
   const publishAt = stepAt('npm publish --access public --provenance');
   const attestAt = stepAt('npx tsx scripts/assert-provenance-attested.ts "@trdlabs/sdk" "$VERSION"');
