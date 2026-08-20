@@ -1,3 +1,10 @@
+@AGENTS.md
+
+<!-- Импорт выше — не украшение. Claude Code читает CLAUDE.md и НЕ читает AGENTS.md
+     (code.claude.com/docs/en/memory). До 2026-08-20 здесь стояла прозаическая отсылка
+     «Repository-specific commands and boundaries: AGENTS.md», и 832 слова настоящих команд
+     и границ этого репозитория в контекст не попадали ни разу. -->
+
 # CLAUDE.md
 
 ## Ecosystem (trdlabs)
@@ -22,4 +29,3 @@ This repository is part of the `trdlabs` trading ecosystem.
 
 If `../control-center` is absent (standalone clone), use local repo docs only.
 
-Repository-specific commands and boundaries: `AGENTS.md` in this repository.
